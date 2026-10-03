@@ -1310,6 +1310,8 @@ class DesktopApi:
             account = self._find_account(preferred_account_id)
             if str(account.get("quotaExhaustedOn") or "") == date.today().isoformat():
                 raise ValueError("该生成账号今日视频额度已用完，请切换其他账号或明日再试")
+            if getattr(self, "_login_expired", {}).get(str(preferred_account_id)):
+                raise ValueError("该生成账号登录已过期，请重新登录后再试")
 
         task_id = uuid.uuid4().hex[:10]
         staging_dir = DATA_DIR / "generation_inputs" / task_id
@@ -1411,6 +1413,8 @@ class DesktopApi:
         if not selected_account_id:
             raise ValueError("请先选择生成账号")
         self._find_account(selected_account_id)
+        if getattr(self, "_login_expired", {}).get(selected_account_id):
+            raise ValueError("该生成账号登录已过期，请重新登录后再试")
         usage_id = f"conversion-{uuid.uuid4().hex[:10]}"
         self._acquire_account_usage(selected_account_id, usage_id, "conversion")
 
@@ -1478,6 +1482,7 @@ class DesktopApi:
             if authenticated is None:
                 authenticated = self._has_saved_original_doubao_session(account_id)
             account["authenticated"] = bool(authenticated)
+            account["loginExpired"] = bool(login_expired.get(account_id))
             account["dailyQuota"] = daily_quota
             account["generatedToday"] = min(generated_today, daily_quota)
             account["quotaRemainingToday"] = max(0, daily_quota - generated_today)
@@ -2966,11 +2971,13 @@ class DesktopApi:
         owner_id: str,
     ) -> dict[str, Any]:
         today = date.today().isoformat()
+        login_expired = getattr(self, "_login_expired", {})
         accounts = [
             account
             for account in self._read_accounts()
             if str(account.get("id") or "").strip()
             and str(account.get("quotaExhaustedOn") or "") != today
+            and not login_expired.get(str(account.get("id") or "").strip())
         ]
         preferred_id = str(preferred_account_id or "").strip()
         accounts.sort(key=lambda account: (
@@ -2978,7 +2985,7 @@ class DesktopApi:
             int(account.get("sortOrder") or 0),
         ))
         if not accounts:
-            raise ValueError("没有可用的生成账号，请检查账号或今日额度")
+            raise ValueError("没有可用的生成账号，请检查账号登录态或今日额度")
 
         with self._lock:
             account = next(

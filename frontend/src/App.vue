@@ -65,15 +65,17 @@ let pollTimer = null
 
 const authenticated = computed(() => Boolean(platformUser.value && authToken.value))
 const isRunning = computed(() => task.value && !['succeeded', 'failed'].includes(task.value.status))
-const canGenerate = computed(() => image.value && prompt.value.trim() && accounts.value.some(account => !account.quotaExhaustedToday && !account.inUse) && !isRunning.value)
+const canGenerate = computed(() => image.value && prompt.value.trim() && accounts.value.some(account => !account.quotaExhaustedToday && !account.inUse && !account.loginExpired) && !isRunning.value)
 const canConvertLink = computed(() => conversionLink.value.trim() && selectedAccountId.value && !selectedAccount.value?.inUse && !convertingLink.value)
 const selectedAccount = computed(() => accounts.value.find(item => item.id === selectedAccountId.value))
 const accountOptions = computed(() => accounts.value.map(account => ({
   label: account.inUse
     ? `${account.name}（运行中）`
-    : `${account.name}（今日 ${accountQuotaRemaining(account)}/${dailyVideoQuota()}）`,
+    : account.loginExpired
+      ? `${account.name}（登录已过期）`
+      : `${account.name}（今日 ${accountQuotaRemaining(account)}/${dailyVideoQuota()}）`,
   value: account.id,
-  disabled: account.inUse || account.quotaExhaustedToday,
+  disabled: account.inUse || account.quotaExhaustedToday || account.loginExpired,
 })))
 // 只有曾经登录过的账号才需要校验登录状态；从未登录的账号直接跳过。
 const checkableAccounts = computed(() => accounts.value.filter(account => account.hasLoggedIn))
@@ -272,10 +274,10 @@ async function loadAppInfo() {
   }
   await loadAccounts()
   await loadGenerationProjects()
-  if (settings.value.defaultAccountId && accounts.value.some(item => item.id === settings.value.defaultAccountId && !item.quotaExhaustedToday && !item.inUse)) {
+  if (settings.value.defaultAccountId && accounts.value.some(item => item.id === settings.value.defaultAccountId && !item.quotaExhaustedToday && !item.inUse && !item.loginExpired)) {
     selectedAccountId.value = settings.value.defaultAccountId
   } else {
-    selectedAccountId.value = accounts.value.find(item => !item.quotaExhaustedToday && !item.inUse)?.id || ''
+    selectedAccountId.value = accounts.value.find(item => !item.quotaExhaustedToday && !item.inUse && !item.loginExpired)?.id || ''
   }
   accountSelectionReady = true
 }
@@ -300,8 +302,8 @@ async function loadAccounts() {
   if (draggingAccountId.value || accountOrderSaving.value) return
   accounts.value = await window.pywebview.api.list_accounts()
   const selected = accounts.value.find(item => item.id === selectedAccountId.value)
-  if (!selected || selected.quotaExhaustedToday || selected.inUse) {
-    selectedAccountId.value = accounts.value.find(item => !item.quotaExhaustedToday && !item.inUse)?.id || ''
+  if (!selected || selected.quotaExhaustedToday || selected.inUse || selected.loginExpired) {
+    selectedAccountId.value = accounts.value.find(item => !item.quotaExhaustedToday && !item.inUse && !item.loginExpired)?.id || ''
   }
 }
 
