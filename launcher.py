@@ -15,7 +15,7 @@ import subprocess
 import threading
 import time
 import uuid
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -1782,8 +1782,43 @@ class DesktopApi:
         return settings
 
     def mark_account_login_expired(self, account_id: str) -> None:
+        self._set_login_expired(account_id, True)
+
+    def _set_login_expired(self, account_id: str, expired: bool) -> None:
+        # 登录过期标记同时写内存与账号数据（loginExpiredAt），避免客户端重启后
+        # 标记丢失、过期账号又被当成可用账号参与生成。
+        clean_account_id = str(account_id or "").strip()
+        if not clean_account_id:
+            return
+        accounts = self._read_accounts()
+        account = next((item for item in accounts if item.get("id") == clean_account_id), None)
+        if account is not None:
+            changed = False
+            if expired:
+                if not account.get("loginExpiredAt"):
+                    account["loginExpiredAt"] = datetime.now().isoformat(timespec="seconds")
+                    changed = True
+            elif account.get("loginExpiredAt"):
+                account.pop("loginExpiredAt", None)
+                changed = True
+            if changed:
+                self._write_accounts(accounts)
+        # 内存标记放在落盘之后写，避免 _read_accounts 内部的还原逻辑覆盖本次结果。
         with self._lock:
-            self._login_expired[account_id] = True
+            if expired:
+                self._login_expired[clean_account_id] = True
+            else:
+                self._login_expired.pop(clean_account_id, None)
+
+    def _restore_login_expired_flags(self, accounts: list[dict[str, Any]]) -> None:
+        # 启动或读取账号时，用持久化的 loginExpiredAt 还原内存标记。
+        # 注意：这里不能获取 self._lock，因为 _read_accounts 可能在持锁路径被调用。
+        # CPython 下整体替换字典是原子操作，读方无中间态风险。
+        self._login_expired = {
+            str(account.get("id") or "").strip(): True
+            for account in accounts
+            if str(account.get("id") or "").strip() and account.get("loginExpiredAt")
+        }
 
     def mark_account_quota_exhausted(
         self,
@@ -2319,15 +2354,13 @@ class DesktopApi:
             current = self._workers.get(account_id)
         if current is not None:
             if current.visible:
-                with self._lock:
-                    self._login_expired.pop(account_id, None)
+                self._set_login_expired(account_id, False)
                 # 浏览器已开着，但用户切到设置中心点登录——主窗口可能已失焦，拉回一次
                 self._bring_main_window_to_foreground()
                 return {"status": "running", "message": f'{account["name"]} 的登录浏览器已经打开'}
             current.stop()
             current.thread.join(timeout=8)
-        with self._lock:
-            self._login_expired.pop(account_id, None)
+        self._set_login_expired(account_id, False)
         worker = self._ensure_worker(account_id, visible=True)
         # 新启动 Chrome 会抢焦点，watcher 在 worker ready 后把主窗口拉回前台
         threading.Thread(
@@ -2356,11 +2389,10 @@ class DesktopApi:
         http_result = self._http_check_login(account_id)
         if http_result is not None:
             logged_in = bool(http_result.get("loggedIn"))
-            with self._lock:
-                if logged_in or not has_logged_in:
-                    self._login_expired.pop(account_id, None)
-                else:
-                    self._login_expired[account_id] = True
+            if logged_in or not has_logged_in:
+                self._set_login_expired(account_id, False)
+            else:
+                self._set_login_expired(account_id, True)
             if logged_in:
                 message = f"{account_name} 登录状态正常（HTTP 校验）"
             elif has_logged_in:
@@ -2402,11 +2434,10 @@ class DesktopApi:
             raise RuntimeError(str(result.get("error") or "校验登录失败"))
         data = dict(result.get("data") or {})
         logged_in = bool(data.get("loggedIn"))
-        with self._lock:
-            if logged_in or not has_logged_in:
-                self._login_expired.pop(account_id, None)
-            else:
-                self._login_expired[account_id] = True
+        if logged_in or not has_logged_in:
+            self._set_login_expired(account_id, False)
+        else:
+            self._set_login_expired(account_id, True)
         if logged_in:
             message = f"{account_name} 登录状态正常"
         elif has_logged_in:
@@ -2580,6 +2611,7 @@ class DesktopApi:
             cached_accounts = []
 
         if not self._storage_available():
+            self._restore_login_expired_flags(cached_accounts)
             return cached_accounts
         try:
             response = self._storage_request("GET", "/api/storage/data/account", timeout=3)
@@ -2596,11 +2628,14 @@ class DesktopApi:
                     json.dumps(local_accounts, ensure_ascii=False, indent=2),
                     encoding="utf-8",
                 )
+                self._restore_login_expired_flags(local_accounts)
                 return local_accounts
             if cached_accounts:
                 self._write_accounts(cached_accounts)
+            self._restore_login_expired_flags(cached_accounts)
             return cached_accounts
         except (httpx.HTTPError, ValueError, OSError, json.JSONDecodeError):
+            self._restore_login_expired_flags(cached_accounts)
             return cached_accounts
 
     def _write_accounts(self, accounts: list[dict[str, Any]]) -> None:
@@ -2909,6 +2944,9 @@ class DesktopApi:
 
     def _record_account_generation_success(self, account_id: str, token: str = "") -> None:
         clean_account_id = str(account_id or "").strip()
+        # 生成成功说明账号会话有效，清除可能残留的过期标记。
+        if self._login_expired.get(clean_account_id):
+            self._set_login_expired(clean_account_id, False)
         accounts = self._read_accounts()
         account = next((item for item in accounts if item.get("id") == clean_account_id), None)
         if account is None:
