@@ -1,0 +1,17 @@
+{
+  "name": "inspiration-video-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vitejs/plugin-vue": "latest",
+    "marked": "^18.0.10",
+    "vite": "latest",
+    "vue": "latest"
+  }
+}

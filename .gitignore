@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+data/
+output/
+frontend/node_modules/
+frontend/dist/
+chrome-win64
+runtime/
+*.zip
+build/
+dist/
+release/
+*.spec.bak
+build_log.txt

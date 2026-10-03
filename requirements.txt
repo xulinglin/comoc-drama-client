@@ -1,0 +1,6 @@
+pywebview>=5.0
+playwright>=1.50
+httpx>=0.28.1
+cryptography>=44.0
+numpy>=2.0
+Pillow>=11.0
