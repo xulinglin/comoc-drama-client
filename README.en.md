@@ -131,8 +131,6 @@ Third-party dependencies and assets retain their own licenses. The new license d
 
 Maintaining this project takes time. If it helps you, you are welcome to buy the author a coffee ☕
 
-| WeChat |
-| :---: |
-| ![WeChat QR code](assets/sponsor-wechat.jpg) |
+<img src="./assets/sponsor-wechat.jpg" alt="WeChat QR code" width="240">
 
 Thank you for your support — it is the greatest motivation for me to keep updating and maintaining this project!

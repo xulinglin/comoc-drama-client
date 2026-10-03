@@ -131,8 +131,6 @@
 
 维护项目不易，如果本项目对你有帮助，欢迎请作者喝杯咖啡 ☕
 
-| 微信 |
-| :---: |
-| ![微信收款码](assets/sponsor-wechat.jpg) |
+<img src="./assets/sponsor-wechat.jpg" alt="微信收款码" width="240">
 
 感谢你的支持，这是我持续更新和维护的最大动力！
