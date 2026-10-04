@@ -215,6 +215,10 @@ class DesktopApi:
         # 客户端重启后由 _restore_login_expired_flags 还原，避免过期账号被误用。
         self._login_expired: dict[str, bool] = {}
         self._media_server = MediaPreviewServer()
+        # Storage 本地服务的长连接客户端，避免高频调用反复握手。
+        self._storage_client = httpx.Client(
+            base_url=f"{STORAGE_API_BASE_URL}/", trust_env=False, timeout=30
+        )
         self._storage_process: subprocess.Popen[Any] | None = None
         self._storage_log_handle: Any = None
         self._local_storage_server: Any = None
@@ -222,6 +226,10 @@ class DesktopApi:
         self._local_storage_migration_last_attempt = 0.0
         # 缓存存储服务健康检查结果，避免每次账号读写都发一次同步 HTTP 往返。
         self._storage_available_cache = (0.0, False)
+        # 缓存账号列表读取结果，避免前端 2.5 秒轮询时每次都走一次同步 HTTP。
+        self._accounts_read_cache = (0.0, [])
+        # 缓存每个账号的 Cookies 登录态探测结果，按 Cookies 文件修改时间失效。
+        self._session_probe_cache: dict[str, tuple[float, bool]] = {}
         self._window_maximized = False
         self._window_restore_bounds: tuple[int, int, int, int] | None = None
         self._session_token = ""
@@ -322,10 +330,18 @@ class DesktopApi:
         ) as client:
             return client.request(method, path.lstrip("/"), **kwargs)
 
-    @staticmethod
-    def _storage_request(method: str, path: str, *, timeout: float, **kwargs: Any) -> httpx.Response:
-        with httpx.Client(base_url=f"{STORAGE_API_BASE_URL}/", trust_env=False, timeout=timeout) as client:
-            return client.request(method, path.lstrip("/"), **kwargs)
+    def _storage_request(self, method: str, path: str, *, timeout: float, **kwargs: Any) -> httpx.Response:
+        # 复用长连接：Storage 是本地服务，客户端调用非常频繁，
+        # 每次新建 Client 都会重新 TCP 握手，是账号/项目类接口卡顿的来源之一。
+        client = self._storage_client
+        try:
+            return client.request(method, path.lstrip("/"), timeout=timeout, **kwargs)
+        except RuntimeError:
+            # 客户端可能已被 shutdown 关闭，兜底重建一次。
+            self._storage_client = httpx.Client(
+                base_url=f"{STORAGE_API_BASE_URL}/", trust_env=False, timeout=timeout
+            )
+            return self._storage_client.request(method, path.lstrip("/"), timeout=timeout, **kwargs)
 
     def _storage_first_request(self, method: str, path: str, *, timeout: float, **kwargs: Any) -> httpx.Response:
         return self._storage_request(method, path, timeout=timeout, **kwargs)
@@ -1560,6 +1576,16 @@ class DesktopApi:
         if not cookie_db.is_file():
             return False
         try:
+            mtime = cookie_db.stat().st_mtime
+        except OSError:
+            return False
+        # 轮询会高频调用本方法，Cookies 文件未变化时直接复用上次结果，
+        # 避免每次都为每个账号开一次 SQLite 连接。
+        cached = self._session_probe_cache.get(account_id)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+        result = False
+        try:
             connection = sqlite3.connect(
                 f"file:{cookie_db.resolve().as_posix()}?mode=ro&immutable=1",
                 uri=True,
@@ -1581,11 +1607,13 @@ class DesktopApi:
                     """,
                     (now_chrome,),
                 ).fetchone()
-                return row is not None
+                result = row is not None
             finally:
                 connection.close()
         except sqlite3.Error:
             return False
+        self._session_probe_cache[account_id] = (mtime, result)
+        return result
 
     # ===== HTTP 探活：缓存 cookie + 直接请求 OriginalDoubao，避免每次校验都开浏览器 =====
     # Chrome 132+ 的 cookie 用 app-bound encryption 加密，DPAPI+AES-GCM 解不开。
@@ -2304,6 +2332,8 @@ class DesktopApi:
             raise ValueError("账号目录无效")
         if account_dir.exists():
             shutil.rmtree(account_dir)
+        # 账号已删除，清理其登录态探测缓存，避免残留无效条目。
+        self._session_probe_cache.pop(clean_account_id, None)
 
         remaining_accounts = [item for item in accounts if item.get("id") != clean_account_id]
         for sort_order, item in enumerate(remaining_accounts):
@@ -2518,6 +2548,10 @@ class DesktopApi:
         for worker in workers:
             worker.stop()
         self._media_server.shutdown()
+        try:
+            self._storage_client.close()
+        except Exception:
+            pass
         if self._local_storage_server is not None:
             try:
                 self._local_storage_server.stop()
@@ -2613,6 +2647,18 @@ class DesktopApi:
             return source
 
     def _read_accounts(self) -> list[dict[str, Any]]:
+        # 前端账号列表按 2.5 秒轮询，这里合并短时间内的重复读取，
+        # 避免每次轮询都走一次同步 HTTP 到 Storage 服务阻塞主线程。
+        now = time.monotonic()
+        cached_at, cached_result = self._accounts_read_cache
+        if cached_result and now - cached_at < 1.5:
+            # 深拷贝：调用方会就地写入运行时字段，不能污染缓存对象。
+            return [dict(item) for item in cached_result]
+        result = self._read_accounts_uncached()
+        self._accounts_read_cache = (now, [dict(item) for item in result])
+        return result
+
+    def _read_accounts_uncached(self) -> list[dict[str, Any]]:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         cached_accounts: list[dict[str, Any]] = []
         try:
@@ -2651,6 +2697,8 @@ class DesktopApi:
             return cached_accounts
 
     def _write_accounts(self, accounts: list[dict[str, Any]]) -> None:
+        # 账号数据发生变化，立即失效读缓存，避免后续读取拿到旧列表。
+        self._accounts_read_cache = (0.0, [])
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         ACCOUNTS_FILE.write_text(
             json.dumps(accounts, ensure_ascii=False, indent=2),

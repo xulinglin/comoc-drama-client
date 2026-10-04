@@ -219,7 +219,11 @@ async function generate() {
       projectId: selectedProjectId.value,
     })
     await pollTask(result.taskId)
-    pollTimer = window.setInterval(() => pollTask(result.taskId), 650)
+    pollTimer = window.setInterval(() => {
+      // 页面切到后台时降低轮询频率，避免无谓占用调用通道。
+      if (document.hidden) return
+      pollTask(result.taskId)
+    }, 1200)
   } catch (err) {
     error.value = cleanError(err)
   }
@@ -406,7 +410,11 @@ watch([showSettings, settingsTab], ([open, tab]) => {
   }
   if (open && tab === 'accounts' && apiReady()) {
     loadAccounts().catch(() => {})
-    accountStatusTimer = window.setInterval(() => loadAccounts().catch(() => {}), 2500)
+    accountStatusTimer = window.setInterval(() => {
+      // 页面切到后台时暂停轮询，避免无意义的调用挤占 pywebview 调用通道。
+      if (document.hidden) return
+      loadAccounts().catch(() => {})
+    }, 5000)
   }
 })
 
