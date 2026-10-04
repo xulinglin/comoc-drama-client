@@ -37,6 +37,7 @@ const settings = ref({ defaultAccountId: '', outputDir: '', storageDir: '', auto
 const settingsMessage = ref('')
 const editingAccountId = ref('')
 const editingAccountName = ref('')
+const renamingAccountId = ref('')
 const deletingAccountId = ref('')
 const accountStateAction = ref('')
 const draggingAccountId = ref('')
@@ -300,6 +301,8 @@ async function loadGenerationProjects() {
 
 async function loadAccounts() {
   if (draggingAccountId.value || accountOrderSaving.value) return
+  // 编辑/删除/重命名进行中时跳过轮询刷新，避免覆盖内联编辑态或与操作结果竞争。
+  if (editingAccountId.value || deletingAccountId.value || renamingAccountId.value) return
   accounts.value = await window.pywebview.api.list_accounts()
   const selected = accounts.value.find(item => item.id === selectedAccountId.value)
   if (!selected || selected.quotaExhaustedToday || selected.inUse || selected.loginExpired) {
@@ -427,23 +430,32 @@ function beginRename(account) {
 async function finishRename() {
   const accountId = editingAccountId.value
   const accountName = editingAccountName.value.trim()
-  if (!accountId) return
+  if (!accountId || renamingAccountId.value) return
   if (!accountName) {
     accountMessage.value = '账号名称不能为空'
     return
   }
+  const previousAccounts = accounts.value
+  renamingAccountId.value = accountId
   try {
     const account = await window.pywebview.api.rename_account(accountId, accountName)
     editingAccountId.value = ''
     editingAccountName.value = ''
-    await loadAccounts()
+    // 就地更新单条记录，避免全量 loadAccounts 触发整列表重渲染与轮询叠加造成的卡顿。
+    accounts.value = accounts.value.map(item => (
+      item.id === accountId ? { ...item, name: account.name } : item
+    ))
     accountMessage.value = `名称已修改为 ${account.name}`
   } catch (err) {
+    accounts.value = previousAccounts
     accountMessage.value = cleanError(err)
+  } finally {
+    renamingAccountId.value = ''
   }
 }
 
 function cancelRename() {
+  if (renamingAccountId.value) return
   editingAccountId.value = ''
   editingAccountName.value = ''
   accountMessage.value = ''
@@ -467,8 +479,14 @@ async function confirmDeleteAccount() {
   try {
     const deleted = await window.pywebview.api.delete_account(account.id)
     if (selectedAccountId.value === account.id) selectedAccountId.value = ''
-    if (editingAccountId.value === account.id) cancelRename()
-    await loadAccounts()
+    if (editingAccountId.value === account.id) {
+      editingAccountId.value = ''
+      editingAccountName.value = ''
+    }
+    // 就地移除该账号并重排序号，避免全量 loadAccounts 触发整列表重渲染。
+    accounts.value = accounts.value
+      .filter(item => item.id !== account.id)
+      .map((item, index) => ({ ...item, sortOrder: index }))
     accountMessage.value = `已删除 ${deleted.name}`
   } catch (err) {
     accountMessage.value = cleanError(err)
@@ -1187,10 +1205,11 @@ onBeforeUnmount(() => {
                   </button>
                 </span>
                 <span v-else class="account-card-actions">
-                  <button class="account-icon-action rename-action" type="button" data-tooltip="保存账号名称" aria-label="保存账号名称" @click.stop="finishRename">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.2 4.2L19 7"/></svg>
+                  <button class="account-icon-action rename-action" type="button" :data-tooltip="renamingAccountId === account.id ? '保存中…' : '保存账号名称'" aria-label="保存账号名称" :disabled="Boolean(renamingAccountId)" @click.stop="finishRename">
+                    <span v-if="renamingAccountId === account.id" class="account-icon-spinner" aria-hidden="true"></span>
+                    <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.2 4.2L19 7"/></svg>
                   </button>
-                  <button class="account-icon-action rename-action" type="button" data-tooltip="取消修改" aria-label="取消修改" @click.stop="cancelRename">
+                  <button class="account-icon-action rename-action" type="button" data-tooltip="取消修改" aria-label="取消修改" :disabled="Boolean(renamingAccountId)" @click.stop="cancelRename">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>
                   </button>
                 </span>

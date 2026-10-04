@@ -220,6 +220,8 @@ class DesktopApi:
         self._local_storage_server: Any = None
         self._local_storage_migration_checked = False
         self._local_storage_migration_last_attempt = 0.0
+        # 缓存存储服务健康检查结果，避免每次账号读写都发一次同步 HTTP 往返。
+        self._storage_available_cache = (0.0, False)
         self._window_maximized = False
         self._window_restore_bounds: tuple[int, int, int, int] | None = None
         self._session_token = ""
@@ -339,11 +341,19 @@ class DesktopApi:
         return self._storage_request(method, path, timeout=timeout, **kwargs)
 
     def _storage_available(self) -> bool:
+        # 健康检查是一次同步 HTTP 往返，账号读写路径上会被反复调用。
+        # 用 2 秒短缓存合并同一批操作内的重复探测，避免主线程被多次网络往返阻塞。
+        now = time.monotonic()
+        cached_at, cached_result = self._storage_available_cache
+        if cached_result and now - cached_at < 2.0:
+            return True
         try:
             response = self._storage_request("GET", "/api/storage/health", timeout=0.8)
-            return response.status_code == 200
+            available = response.status_code == 200
         except httpx.HTTPError:
-            return False
+            available = False
+        self._storage_available_cache = (now, available)
+        return available
 
     def _start_local_storage(self) -> None:
         """启动内置的纯 Python 本地存储服务（无需 Java）。"""
@@ -357,6 +367,7 @@ class DesktopApi:
             storage_dir = Path(str(self.get_settings().get("storageDir") or STORAGE_DIR)).expanduser().resolve()
             self._local_storage_server = LocalStorageServer(storage_dir, port=int(urlparse(STORAGE_API_BASE_URL).port or 18081))
             self._local_storage_server.start()
+            self._storage_available_cache = (0.0, False)
         except OSError:
             self._local_storage_server = None
 
@@ -398,6 +409,7 @@ class DesktopApi:
         )
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
+            self._storage_available_cache = (0.0, False)
             if self._storage_process.poll() is not None or self._storage_available():
                 break
             time.sleep(0.2)
