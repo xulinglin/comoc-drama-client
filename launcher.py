@@ -211,8 +211,8 @@ class DesktopApi:
         self._lock = threading.Lock()
         self._workers: dict[str, AccountBrowserWorker] = {}
         self._account_usage: dict[str, dict[str, Any]] = {}
-        # 校验登录得到的"会话已过期"标记（运行时内存态，随客户端重启清空；
-        # 不写入 accounts.json，避免被云同步的字段白名单覆盖丢失）。
+        # 校验登录得到的"会话已过期"标记。会随账号数据持久化到 loginExpiredAt 字段，
+        # 客户端重启后由 _restore_login_expired_flags 还原，避免过期账号被误用。
         self._login_expired: dict[str, bool] = {}
         self._media_server = MediaPreviewServer()
         self._storage_process: subprocess.Popen[Any] | None = None

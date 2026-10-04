@@ -1,8 +1,8 @@
-# CDTV 漫剧客户端（comoc-drama-client）
+# CDTV 漫剧自动化客户端（comoc-drama-client）
 
 [English](README.en.md) | 简体中文
 
-一个使用 Vue 3、pywebview、Python 和 Playwright 构建的桌面应用，用于 AI 漫剧与短视频创作。将项目管理、素材库、分镜编辑、视频生成与账号调度整合到统一工作区，通过 OriginalDoubao 的浏览器界面完成自动化操作，减少重复配置与提交工作。**工作区与数据存储在本机运行，无需部署后端、无需 Java、客户端免注册登录。**
+一个使用 Vue 3、pywebview、Python 和 Playwright 构建的本地桌面应用，面向 AI 漫剧制作流程自动化。将项目管理、素材整理、分镜编辑、视频生成与账号调度整合到统一工作区，通过 OriginalDoubao 浏览器自动化减少重复配置与提交工作。**项目数据与素材保存在本机，无需部署后端、无需 Java、客户端免注册登录；OriginalDoubao 视频生成需单独登录对应账号。**
 
 > 📢 **欢迎加入 QQ 交流群：1125912862**
 

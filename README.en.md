@@ -1,8 +1,8 @@
-# CDTV Drama Desktop Client (comoc-drama-client)
+# CDTV Comic-Drama Automation Client (comoc-drama-client)
 
 English | [简体中文](README.md)
 
-A desktop application built with Vue 3, pywebview, Python, and Playwright for AI comic-drama and short-video creation. It supports project management, asset and storyboard management, local image selection, and multi-account video generation through the OriginalDoubao's browser interface, reducing repetitive setup and submissions. **The workspace and storage run locally; no backend deployment, Java runtime, or client registration is required.**
+A local desktop application built with Vue 3, pywebview, Python, and Playwright for automating AI comic-drama production workflows. It brings project management, asset organization, storyboard editing, video generation, and account scheduling into one workspace, using OriginalDoubao browser automation to reduce repetitive setup and submissions. **Project data and assets are stored locally; no backend deployment, Java runtime, or client registration or login is required. OriginalDoubao video generation requires a separate login to that service.**
 
 > 📢 **Welcome to join the QQ group: 1125912862**
 
