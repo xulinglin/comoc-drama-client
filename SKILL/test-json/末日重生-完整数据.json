@@ -1,0 +1,1135 @@
+{
+  "schema_version": "1.0",
+  "project": "mori-rebirth",
+  "title": "末日重生-完整数据",
+  "generated_at": "2026-08-15T05:57:28.997797+00:00",
+  "style": {
+    "visual_route": "3d_cg",
+    "public_visual_prompt": {
+      "zh": "3D 游戏 CG 风格末日题材动画，UE5 电影化渲染，风格化写实高模，次表面皮肤质感，4K 高画质，冷灰青主调，血色残阳黄昏光，体积光与雾效，粒子尘埃，镜头光晕，微动态模糊，浅景深，高对比明暗，负面提示：真人实拍、真人照片、真人实景、真实人像、真人皮肤质感、真人皮肤纹理、摄影人像、写实照片、2D 动漫、卡通低模、塑料质感、模糊、畸形手、多指、低分辨率、水印、文字、审查遮挡",
+      "en": "stylized realistic 3D game CG post-apocalyptic animation, UE5 cinematic rendering, high-poly detailed models, subsurface skin shading, 4K quality, cold gray-blue primary palette, blood-red sunset dusk light, volumetric light and haze, dust particles, lens flare, subtle motion blur, shallow depth of field, high contrast, negative: live-action footage, real photographs, real people, real human skin texture, photographic portraits, realistic photography, 2D anime, cartoon low-poly, plastic texture, blurry, deformed hands, extra fingers, lowres, watermark, text, censored"
+    },
+    "genre": "末日重生 + 游戏系统流",
+    "audience": "25-40 岁男性，系统流爽文读者",
+    "mood": {
+      "core": [
+        "爽",
+        "燃"
+      ],
+      "pacing": "开场 3 秒抛钩子（觉醒+系统面板），每 10-15 秒一个起伏（首杀→弱点暴击→精英→BOSS 层层升级），结尾留悬念（BOSS 战开启）"
+    },
+    "visual_notes": "3D 游戏 CG 风格末日题材动画，UE5 电影化渲染，风格化写实高模",
+    "camera_style": "开场特写钩子，战斗用中近景+升格，精英/BOSS 用低角度仰拍，升级爆装备用全景",
+    "audio_style": {
+      "bgm": "低频电子 + 工业金属鼓点，BOSS 段加重低音",
+      "sfx": "系统提示音\"叮\"、面板电子音、重击拟声放大"
+    },
+    "taboos": [
+      "无血腥断肢特写",
+      "无裸露",
+      "无吸烟镜头"
+    ],
+    "negative_prompt": "真人实拍、真人照片、真人实景、真实人像、真人皮肤质感、真人皮肤纹理、摄影人像、写实照片、2D 动漫、卡通低模、塑料质感、模糊、畸形手、多指、低分辨率、水印、文字、审查遮挡"
+  },
+  "consistency": {
+    "characters": [
+      {
+        "id": "林风",
+        "name": "林风",
+        "aliases": [
+          "林风",
+          "男主"
+        ],
+        "gender_age": "男，约25岁",
+        "appearance": "坚毅面容，锐利双眼，颧骨分明",
+        "outfit": "军绿工装夹克，破旧牛仔裤",
+        "hair": "短黑发",
+        "temperament": "谨慎、坚毅、重生者的冷静",
+        "scenes": [
+          "觉醒废墟",
+          "末日街道",
+          "街心花园"
+        ]
+      },
+      {
+        "id": "普通丧尸",
+        "name": "普通丧尸",
+        "aliases": [
+          "丧尸"
+        ],
+        "gender_age": "男女不分，约30岁",
+        "appearance": "腐烂灰败皮肤，浑浊眼神",
+        "outfit": "褴褛破衣",
+        "hair": "凌乱枯发",
+        "temperament": "蹒跚、凶戾",
+        "scenes": [
+          "末日街道",
+          "街心花园"
+        ]
+      },
+      {
+        "id": "狂暴铁甲尸",
+        "name": "狂暴铁甲尸",
+        "aliases": [
+          "精英怪"
+        ],
+        "gender_age": "男，约35岁",
+        "appearance": "青灰虬结肌肉，赤红双眼，体型是普通丧尸两倍",
+        "outfit": "残破铁甲，金属护臂",
+        "hair": "光头",
+        "temperament": "狂暴、凶猛",
+        "scenes": [
+          "末日街道"
+        ]
+      },
+      {
+        "id": "尸王统领-初级",
+        "name": "尸王统领·初级",
+        "aliases": [
+          "BOSS"
+        ],
+        "gender_age": "男，约40岁",
+        "appearance": "黑色甲壳覆盖全身，赤红双眼，身高超三米",
+        "outfit": "黑色甲壳铠甲，手持断裂钢梁",
+        "hair": "光头",
+        "temperament": "暴虐、压迫、帝王威压",
+        "scenes": [
+          "街心花园"
+        ]
+      }
+    ],
+    "scenes": [
+      {
+        "id": "觉醒废墟",
+        "name": "觉醒废墟",
+        "environment": "破碎高楼残骸，坍塌墙壁，瓦砾堆",
+        "lighting": "尘土弥漫，冷灰青调，血色残阳",
+        "key_elements": [
+          "瓦砾堆",
+          "光束尘埃",
+          "蓝色数据框光效"
+        ],
+        "characters": [
+          "林风"
+        ]
+      },
+      {
+        "id": "末日街道",
+        "name": "末日街道",
+        "environment": "废弃车辆，断壁残垣，路灯",
+        "lighting": "雾霾，冷灰青调，血色残阳黄昏",
+        "key_elements": [
+          "废弃公交车",
+          "断裂交通标志杆",
+          "路灯",
+          "丧尸"
+        ],
+        "characters": [
+          "林风",
+          "普通丧尸",
+          "狂暴铁甲尸"
+        ]
+      },
+      {
+        "id": "街心花园",
+        "name": "街心花园",
+        "environment": "地面龟裂，裂开地缝，街心花园残骸",
+        "lighting": "血色残阳压顶，冷灰青调+红光",
+        "key_elements": [
+          "地缝",
+          "黑色甲壳BOSS",
+          "围拢丧尸"
+        ],
+        "characters": [
+          "林风",
+          "尸王统领·初级",
+          "普通丧尸"
+        ]
+      }
+    ],
+    "props": [
+      {
+        "id": "破旧钢管",
+        "name": "破旧钢管",
+        "appearance": "锈蚀金属，刮痕密布",
+        "tags": [
+          "白色·普通（后期叠加）"
+        ],
+        "scene": "末日街道",
+        "holder": "林风"
+      },
+      {
+        "id": "破旧布甲",
+        "name": "破旧布甲",
+        "appearance": "灰旧布料甲衣，磨损破洞",
+        "tags": [
+          "白色·普通（后期叠加）"
+        ],
+        "scene": "末日街道",
+        "holder": "林风"
+      },
+      {
+        "id": "初级生命药水",
+        "name": "初级生命药水",
+        "appearance": "玻璃小瓶，红色液体",
+        "tags": [
+          "白色·消耗品（后期叠加）"
+        ],
+        "scene": "末日街道",
+        "holder": "林风"
+      },
+      {
+        "id": "精铁战刀",
+        "name": "精铁战刀",
+        "appearance": "精铁锻造，刀刃泛淡绿光，锋利",
+        "tags": [
+          "绿色·优秀（后期叠加）"
+        ],
+        "scene": "末日街道",
+        "holder": "林风"
+      },
+      {
+        "id": "铁甲护腕",
+        "name": "铁甲护腕",
+        "appearance": "深色金属护腕，铆钉加固",
+        "tags": [
+          "绿色·优秀（后期叠加）"
+        ],
+        "scene": "末日街道",
+        "holder": "林风"
+      },
+      {
+        "id": "废弃公交车",
+        "name": "废弃公交车",
+        "appearance": "车身锈蚀凹陷，车门半开，车身倾斜",
+        "tags": [
+          "掩体（无面板）"
+        ],
+        "scene": "末日街道",
+        "holder": "无"
+      },
+      {
+        "id": "断裂交通标志杆",
+        "name": "断裂交通标志杆",
+        "appearance": "断折铁杆，尖端锐利露出地面",
+        "tags": [
+          "掩体/武器（无面板）"
+        ],
+        "scene": "末日街道",
+        "holder": "无"
+      }
+    ],
+    "audio": [
+      {
+        "id": "林风-voice",
+        "character": "林风",
+        "voice": "低沉冷静男声",
+        "speed": "偏快",
+        "tone": "冷静、嘲讽、重生者的笃定、热血",
+        "catchphrase": "这他娘的真是游戏"
+      },
+      {
+        "id": "系统提示音-voice",
+        "character": "系统提示音",
+        "voice": "机械女声",
+        "speed": "匀速",
+        "tone": "中性、无感情",
+        "catchphrase": "叮！等级提升"
+      },
+      {
+        "id": "世界公告音-voice",
+        "character": "世界公告音",
+        "voice": "恢弘男声带金质混响",
+        "speed": "中速",
+        "tone": "庄严、宏大",
+        "catchphrase": "全服首杀挑战即将开始"
+      },
+      {
+        "id": "普通丧尸-voice",
+        "character": "普通丧尸",
+        "voice": "沙哑嘶吼",
+        "speed": "—",
+        "tone": "凶戾、非语言",
+        "catchphrase": "低吼声"
+      },
+      {
+        "id": "狂暴铁甲尸-voice",
+        "character": "狂暴铁甲尸",
+        "voice": "低沉浑厚咆哮带混响",
+        "speed": "慢",
+        "tone": "狂暴、凶猛",
+        "catchphrase": "撕裂咆哮"
+      },
+      {
+        "id": "尸王统领-初级-voice",
+        "character": "尸王统领·初级",
+        "voice": "极低沉帝王音带混响",
+        "speed": "慢",
+        "tone": "暴虐、压迫",
+        "catchphrase": "震地咆哮"
+      }
+    ]
+  },
+  "shots": [
+    {
+      "id": 1,
+      "duration_s": 10,
+      "title": "钩子：觉醒睁眼",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}"
+        ],
+        "voices": [
+          "{{Mixed 11}}"
+        ],
+        "first_frame": "{{Mixed 21}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第一幕：觉醒睁眼",
+          "visual": "林风的双眼猛然睁开，瞳孔瞬间放大又收缩，蓝色网格光在眼前亮起闪动，目光从涣散聚焦为震惊，呼吸骤然急促，衣领上的尘土簌簌抖落",
+          "camera": "大特写固定，急速推镜头（Crash Zoom）怼到瞳孔，背景产生微弱动态模糊",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "心跳骤起",
+              "detail": "咚、咚、咚"
+            },
+            {
+              "type": "sfx",
+              "desc": "废墟风声",
+              "detail": "呼——"
+            },
+            {
+              "type": "sfx",
+              "desc": "系统电子音",
+              "detail": "叮——"
+            },
+            {
+              "type": "voice",
+              "desc": "林风",
+              "detail": "这不是梦……（内心，低沉急促）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "双眼完全睁开，瞳孔中映出蓝色网格光 → 镜 2 首帧延续\"林风已睁眼，撑坐起身\""
+    },
+    {
+      "id": 2,
+      "duration_s": 10,
+      "title": "系统面板浮现",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}"
+        ],
+        "voices": [
+          "{{Mixed 12}}"
+        ],
+        "first_frame": "{{Mixed 22}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第一幕：系统面板浮现",
+          "visual": "林风撑着瓦砾缓缓坐直，抬起手腕，淡蓝色光屏逐行亮起文字，光粒子沿手臂向上汇聚，他缓缓抬头，眼神从困惑转为专注",
+          "camera": "中景固定缓推（slow push-in），随他抬头轻微上移",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "光屏启动电子音",
+              "detail": "嗡——"
+            },
+            {
+              "type": "sfx",
+              "desc": "粒子流动声",
+              "detail": "咝咝"
+            },
+            {
+              "type": "voice",
+              "desc": "系统提示音",
+              "detail": "欢迎来到末日online，当前服务器地球服-华夏区（机械女声，匀速）"
+            },
+            {
+              "type": "voice",
+              "desc": "林风",
+              "detail": "这不是梦……（内心低语）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "林风完全坐起，手腕光屏全亮 → 镜 3 首帧切\"近景怼手腕面板\""
+    },
+    {
+      "id": 3,
+      "duration_s": 10,
+      "title": "觉醒台词",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}"
+        ],
+        "voices": [
+          "{{Mixed 11}}"
+        ],
+        "first_frame": "{{Mixed 23}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第一幕：觉醒台词",
+          "visual": "林风看着面板上滚动的属性文字，眉头微挑，嘴角缓缓勾起，低声自语，手腕光屏的光在脸上明灭闪烁",
+          "camera": "中近景固定（static shot），三分法构图",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "面板刷新电子音",
+              "detail": "滴、滴、滴"
+            },
+            {
+              "type": "voice",
+              "desc": "林风",
+              "detail": "这不是梦……前世这个时候我还在丧尸嘴里抢罐头，现在——居然变成了游戏世界？！（低沉，先颤后笃定）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "林风表情从震惊转为暗喜，目光锁定面板 → 镜 4 首帧切全景\"街道丧尸群\""
+    },
+    {
+      "id": 4,
+      "duration_s": 10,
+      "title": "丧尸游荡",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}",
+          "{{Mixed 2}}"
+        ],
+        "voices": [
+          "{{Mixed 14}}"
+        ],
+        "first_frame": "{{Mixed 24}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第一幕：丧尸游荡",
+          "visual": "丧尸们拖着重步蹒跚游荡，手臂无意识前伸，头顶血条随移动轻微摆动，林风握拳立于远景，靠前一只丧尸突然转头，浑浊眼珠转向林风方向",
+          "camera": "中景快速横移（tracking shot）掠过丧尸群，与丧尸行进方向相反",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "丧尸低吼",
+              "detail": "呃…啊…"
+            },
+            {
+              "type": "sfx",
+              "desc": "拖步摩擦声",
+              "detail": "沙、沙"
+            },
+            {
+              "type": "voice",
+              "desc": "普通丧尸",
+              "detail": "呃…啊…（沙哑嘶吼，音色引用音频卡）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "丧尸群面向林风方向缓步逼近 → 镜 5 首帧切\"林风手部特写\""
+    },
+    {
+      "id": 5,
+      "duration_s": 10,
+      "title": "捡钢管",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}"
+        ],
+        "voices": [
+          "{{Mixed 11}}"
+        ],
+        "first_frame": "{{Mixed 25}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第二幕：捡钢管",
+          "visual": "林风手指抓住钢管，指节发力收紧，钢管被从地面提起，锈屑尘土簌簌滑落，金属刮痕在血阳下闪过冷光，蓝色属性框随之亮起",
+          "camera": "特写跟随手部动作下移（tilt down），紧咬钢管离地瞬间",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "金属刮擦",
+              "detail": "吱——"
+            },
+            {
+              "type": "sfx",
+              "desc": "尘土簌簌声"
+            },
+            {
+              "type": "sfx",
+              "desc": "属性框电子音",
+              "detail": "叮"
+            },
+            {
+              "type": "voice",
+              "desc": "林风",
+              "detail": "攻击3-5，比空手强一点点……（内心，低声）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "钢管完全离地握在手中，属性框全亮 → 镜 6 首帧延续\"举管端详\""
+    },
+    {
+      "id": 6,
+      "duration_s": 10,
+      "title": "连装备都有颜色",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}"
+        ],
+        "voices": [
+          "{{Mixed 11}}"
+        ],
+        "first_frame": "{{Mixed 26}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第二幕：连装备都有颜色",
+          "visual": "林风把钢管举到眼前左右翻转端详，嘴角抽动两下，眼神从震惊转为苦笑，低声自语时喉结滚动",
+          "camera": "中近景固定（static shot），三分法构图",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "低声轻笑"
+            },
+            {
+              "type": "sfx",
+              "desc": "装备提示音",
+              "detail": "叮"
+            },
+            {
+              "type": "voice",
+              "desc": "林风",
+              "detail": "这他娘的真是游戏……连装备都有颜色了。（哭笑不得）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "表情定格为苦笑，钢管握紧 → 镜 7 首帧切\"攻击瞬间钢管挥至半空\""
+    },
+    {
+      "id": 7,
+      "duration_s": 10,
+      "title": "首杀暴击",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}",
+          "{{Mixed 2}}"
+        ],
+        "voices": [
+          "{{Mixed 14}}"
+        ],
+        "first_frame": "{{Mixed 27}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第二幕：首杀暴击",
+          "visual": "林风侧身一闪躲过丧尸扑咬，钢管带着风声砸在丧尸后脑，爆出红色\"-35 暴击\"数字，丧尸软软倒地，血条瞬间清空化为粒子消散",
+          "camera": "中近景手持晃动（handheld），打击瞬间升格（slow motion）半秒",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "钢管重击",
+              "detail": "咚！"
+            },
+            {
+              "type": "sfx",
+              "desc": "骨骼碎裂",
+              "detail": "咔嚓"
+            },
+            {
+              "type": "sfx",
+              "desc": "击杀提示音",
+              "detail": "叮"
+            },
+            {
+              "type": "voice",
+              "desc": "普通丧尸",
+              "detail": "吼——（沙哑嘶吼，音色引用音频卡）"
+            },
+            {
+              "type": "voice",
+              "desc": "林风",
+              "detail": "呵。（低声，轻笑）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "丧尸倒地化为粒子，林风握管站定 → 镜 8 首帧切\"弯腰捡布甲\""
+    },
+    {
+      "id": 8,
+      "duration_s": 10,
+      "title": "捡布甲穿装备",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}"
+        ],
+        "voices": [
+          "{{Mixed 12}}"
+        ],
+        "first_frame": "{{Mixed 28}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第二幕：捡布甲穿装备",
+          "visual": "林风捡起布甲抖开尘土，直接套上身，蓝色光效沿衣甲流过一遍，属性框更新\"防御+2 体质+1\"，他低头打量自己，眼睛一亮",
+          "camera": "中景固定缓推（slow push-in）",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "布甲抖动",
+              "detail": "扑簌"
+            },
+            {
+              "type": "sfx",
+              "desc": "装备光效",
+              "detail": "嗡"
+            },
+            {
+              "type": "sfx",
+              "desc": "系统提示音",
+              "detail": "叮"
+            },
+            {
+              "type": "voice",
+              "desc": "系统提示音",
+              "detail": "装备破旧布甲，防御+2，体质+1（机械女声，匀速）"
+            },
+            {
+              "type": "voice",
+              "desc": "林风",
+              "detail": "打怪掉装备，穿装备加属性——这感觉，太爽了！（上扬，兴奋）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "布甲上身完成，属性框消散 → 镜 9 首帧切\"对第二只丧尸弱点打击\""
+    },
+    {
+      "id": 9,
+      "duration_s": 10,
+      "title": "弱点暴击",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}",
+          "{{Mixed 2}}"
+        ],
+        "voices": [],
+        "first_frame": "{{Mixed 29}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第二幕：弱点暴击",
+          "visual": "林风屏息瞄准，钢管精准戳中丧尸头部，爆出\"-72 弱点暴击\"数字，丧尸当场毙命，爆出铜币与一瓶红色药水滚落地面",
+          "camera": "中景侧机位固定（static shot），命中瞬间微升格",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "闷击",
+              "detail": "噗！"
+            },
+            {
+              "type": "sfx",
+              "desc": "数字爆字音效"
+            },
+            {
+              "type": "sfx",
+              "desc": "铜币落地",
+              "detail": "叮铃"
+            },
+            {
+              "type": "sfx",
+              "desc": "药水滚动",
+              "detail": "骨碌碌"
+            },
+            {
+              "type": "voice",
+              "desc": "林风",
+              "detail": "这游戏还挺良心，掉率不低。（轻松，弯腰捡药水）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "丧尸倒下爆出掉落物，药水滚地 → 镜 10 首帧切\"前方精英怪登场\""
+    },
+    {
+      "id": 10,
+      "duration_s": 10,
+      "title": "精英怪登场",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}",
+          "{{Mixed 3}}"
+        ],
+        "voices": [
+          "{{Mixed 15}}"
+        ],
+        "first_frame": "{{Mixed 30}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第三幕：精英怪登场",
+          "visual": "狂暴铁甲尸咆哮一声，双手拍地，地面震起碎石，朝林风狂奔冲来，体型压迫感扑面，林风握管不退，眼神兴奋，嘴角上扬",
+          "camera": "低角度仰拍 + 缓拉（slow pull-back）露出精英怪全貌，地面震动镜头微晃",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "重步踏地",
+              "detail": "咚、咚、咚"
+            },
+            {
+              "type": "sfx",
+              "desc": "咆哮",
+              "detail": "吼——"
+            },
+            {
+              "type": "sfx",
+              "desc": "地面龟裂",
+              "detail": "咔咔"
+            },
+            {
+              "type": "voice",
+              "desc": "狂暴铁甲尸",
+              "detail": "吼——！（低沉浑厚咆哮，音色引用音频卡）"
+            },
+            {
+              "type": "voice",
+              "desc": "林风",
+              "detail": "组队？我一个人就够了。（轻蔑，自信）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "精英怪冲至林风面前数米 → 镜 11 首帧接\"林风转身跑向公交车\""
+    },
+    {
+      "id": 11,
+      "duration_s": 10,
+      "title": "公交车绕位",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}",
+          "{{Mixed 3}}"
+        ],
+        "voices": [
+          "{{Mixed 15}}"
+        ],
+        "first_frame": "{{Mixed 31}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第三幕：公交车绕位",
+          "visual": "林风从车门钻入，从后窗翻出落地，狂暴铁甲尸刹不住一头撞上公交车侧面，车身凹陷，它被反震踉跄后退两步，头顶冒出\"-10 眩晕1秒\"",
+          "camera": "中全景横移跟拍（tracking shot）跟随林风钻车动作，撞击瞬间镜头震一下",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "车身撞击",
+              "detail": "轰！"
+            },
+            {
+              "type": "sfx",
+              "desc": "金属凹陷",
+              "detail": "哐"
+            },
+            {
+              "type": "sfx",
+              "desc": "眩晕提示音",
+              "detail": "叮咚"
+            },
+            {
+              "type": "voice",
+              "desc": "狂暴铁甲尸",
+              "detail": "吼…（撞晕，踉跄）"
+            },
+            {
+              "type": "voice",
+              "desc": "林风",
+              "detail": "走你。（低喝）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "精英怪眩晕后退，林风已绕到它背后 → 镜 12 首帧接\"背后偷袭绕圈磨血\""
+    },
+    {
+      "id": 12,
+      "duration_s": 10,
+      "title": "磨血回血",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}",
+          "{{Mixed 3}}"
+        ],
+        "voices": [
+          "{{Mixed 11}}"
+        ],
+        "first_frame": "{{Mixed 32}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第三幕：磨血回血",
+          "visual": "林风绕圈走位，钢管连续戳中膝盖关节爆出-30、-28、-32，精英怪怒吼转身一爪横扫，林风后仰躲过仍被爪风刮中手臂，他掏出血药一口灌下，头顶冒出\"+50 HP\"绿字",
+          "camera": "中景环绕（orbit shot）绕精英怪半圈，跟随林风走位",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "钢管戳击",
+              "detail": "哒、哒"
+            },
+            {
+              "type": "sfx",
+              "desc": "爪风破空",
+              "detail": "咻"
+            },
+            {
+              "type": "sfx",
+              "desc": "喝药咕嘟声"
+            },
+            {
+              "type": "sfx",
+              "desc": "回血提示",
+              "detail": "叮"
+            },
+            {
+              "type": "voice",
+              "desc": "林风",
+              "detail": "还挺疼。不过，精英怪的经验和掉落应该不错。（喘气，带笑）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "林风血量回满，精英怪血量降至两成仰天蓄力 → 镜 13 首帧接\"跳车顶躲咆哮\""
+    },
+    {
+      "id": 13,
+      "duration_s": 10,
+      "title": "撕裂咆哮规避",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}",
+          "{{Mixed 3}}"
+        ],
+        "voices": [
+          "{{Mixed 15}}"
+        ],
+        "first_frame": "{{Mixed 33}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第三幕：撕裂咆哮规避",
+          "visual": "精英怪释放\"撕裂咆哮\"，环形音浪向四周扩散震碎地砖，林风提前跃上公交车顶避开冲击波，随后从车顶一跃而下，钢管高举借下落之势砸向精英怪头顶正中",
+          "camera": "低角度仰拍 + 上摇（tilt up）跟林风跃上车顶，下落瞬间切俯拍",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "咆哮技能音浪",
+              "detail": "嗡轰——"
+            },
+            {
+              "type": "sfx",
+              "desc": "地砖碎裂",
+              "detail": "咔啦"
+            },
+            {
+              "type": "sfx",
+              "desc": "跃起破空声",
+              "detail": "嗖"
+            },
+            {
+              "type": "voice",
+              "desc": "狂暴铁甲尸",
+              "detail": "吼——！（撕裂咆哮，震耳）"
+            },
+            {
+              "type": "voice",
+              "desc": "林风",
+              "detail": "上当了！（低喝）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "钢管即将砸中精英怪头顶 → 镜 14 首帧接\"致命暴击命中瞬间\""
+    },
+    {
+      "id": 14,
+      "duration_s": 10,
+      "title": "致命一击",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}",
+          "{{Mixed 3}}"
+        ],
+        "voices": [
+          "{{Mixed 12}}"
+        ],
+        "first_frame": "{{Mixed 34}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第三幕：致命一击",
+          "visual": "钢管带着下坠之力砸实精英怪头顶，金色数字-88炸开，精英怪血条归零轰然倒地，身体炸开一地物品光团，林风单膝落地站稳，微微喘息",
+          "camera": "中近景 + 打击瞬间升格（slow motion），随后恢复正常速度",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "重击爆响",
+              "detail": "咚！"
+            },
+            {
+              "type": "sfx",
+              "desc": "致命暴击音效",
+              "detail": "叮咚叮"
+            },
+            {
+              "type": "sfx",
+              "desc": "倒地闷响",
+              "detail": "轰"
+            },
+            {
+              "type": "voice",
+              "desc": "系统提示音",
+              "detail": "击杀精英怪狂暴铁甲尸，经验+200，等级提升（机械女声，上扬）"
+            },
+            {
+              "type": "voice",
+              "desc": "林风",
+              "detail": "（喘息，无台词）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "精英怪倒地爆出满地掉落 → 镜 15 首帧接\"捡装备学技能\""
+    },
+    {
+      "id": 15,
+      "duration_s": 10,
+      "title": "大爆掉落升级",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}"
+        ],
+        "voices": [
+          "{{Mixed 11}}",
+          "{{Mixed 12}}"
+        ],
+        "first_frame": "{{Mixed 35}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第三幕：大爆掉落升级",
+          "visual": "林风捡起精铁战刀与铁甲护腕，绿光沿装备流过一遍，他当场换上战刀护腕，翻开技能书学习\"撕裂\"，周身爆开一圈升级蓝光，属性框快速滚动更新",
+          "camera": "中景缓推（slow push-in），升级光效炸开瞬间镜头微震",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "装备光效",
+              "detail": "嗡"
+            },
+            {
+              "type": "sfx",
+              "desc": "升级音效",
+              "detail": "叮叮叮（上扬）"
+            },
+            {
+              "type": "sfx",
+              "desc": "战刀出鞘",
+              "detail": "铮"
+            },
+            {
+              "type": "voice",
+              "desc": "林风",
+              "detail": "绿色装备……技能书……这精英怪没白打！（兴奋）"
+            },
+            {
+              "type": "voice",
+              "desc": "系统提示音",
+              "detail": "学习技能撕裂成功（机械女声，匀速）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "林风持绿色战刀站定，蓝光渐散 → 镜 16 首帧接\"地面震动BOSS登场\""
+    },
+    {
+      "id": 16,
+      "duration_s": 10,
+      "title": "BOSS 登场",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}",
+          "{{Mixed 4}}",
+          "{{Mixed 2}}"
+        ],
+        "voices": [
+          "{{Mixed 16}}"
+        ],
+        "first_frame": "{{Mixed 36}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第四幕：BOSS 登场",
+          "visual": "地面剧烈震动，地缝不断扩大，尸王统领从地下撑起爬出，碎石飞溅，它站直身躯发出震地咆哮，红色BOSS血条亮起，林风握刀立于远处，衣摆被气浪吹动",
+          "camera": "低角度仰拍 + 缓拉（slow pull-back）从林风背后拉出BOSS全貌",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "地面震动",
+              "detail": "轰隆"
+            },
+            {
+              "type": "sfx",
+              "desc": "碎石滚落",
+              "detail": "哗啦"
+            },
+            {
+              "type": "sfx",
+              "desc": "BOSS咆哮",
+              "detail": "吼——！"
+            },
+            {
+              "type": "voice",
+              "desc": "尸王统领·初级",
+              "detail": "吼——！（极低沉帝王咆哮带混响，音色引用音频卡）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "BOSS完全站立俯瞰林风，血条全亮 → 镜 17 首帧接\"金色世界公告\""
+    },
+    {
+      "id": 17,
+      "duration_s": 10,
+      "title": "世界公告",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}",
+          "{{Mixed 4}}"
+        ],
+        "voices": [
+          "{{Mixed 13}}"
+        ],
+        "first_frame": "{{Mixed 37}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第四幕：世界公告",
+          "visual": "金色公告文字逐字展开放大，林风仰头看着公告，瞳孔一缩，握刀的手紧了紧，嘴角缓缓咧开，眼神燃起战意",
+          "camera": "中全景仰拍（low angle）+ 缓推（slow push-in）向林风面部",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "公告号角",
+              "detail": "嘟——"
+            },
+            {
+              "type": "sfx",
+              "desc": "金字符文音",
+              "detail": "叮铃"
+            },
+            {
+              "type": "voice",
+              "desc": "世界公告音",
+              "detail": "玩家林风发现隐藏BOSS尸王统领·初级！全服首杀挑战即将开始！（恢弘男声带金质混响，庄严宏大）"
+            },
+            {
+              "type": "voice",
+              "desc": "林风",
+              "detail": "隐藏BOSS……首杀……（低声，兴奋）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "林风嘴角上扬，战刀横握 → 镜 18 首帧接\"提刀走向BOSS\""
+    },
+    {
+      "id": 18,
+      "duration_s": 10,
+      "title": "迎战（结尾钩子）",
+      "assets": {
+        "characters": [
+          "{{Mixed 1}}",
+          "{{Mixed 4}}"
+        ],
+        "voices": [
+          "{{Mixed 11}}"
+        ],
+        "first_frame": "{{Mixed 38}}"
+      },
+      "acts": [
+        {
+          "time": "00:00-00:10",
+          "name": "第四幕：迎战",
+          "visual": "林风提刀一步步走向BOSS，脚步坚定，战刀绿光在血阳下划出弧线，BOSS 低俯身躯蓄势，远处丧尸群缓缓围拢，画面随林风步伐缓慢推近，定格在两者对峙",
+          "camera": "全景剪影固定（static shot）+ 缓慢推近（slow push-in），结尾定格",
+          "audio": [
+            {
+              "type": "sfx",
+              "desc": "脚步声",
+              "detail": "嗒、嗒"
+            },
+            {
+              "type": "sfx",
+              "desc": "战刀嗡鸣",
+              "detail": "嗡——"
+            },
+            {
+              "type": "sfx",
+              "desc": "BOSS低吼",
+              "detail": "呼——"
+            },
+            {
+              "type": "voice",
+              "desc": "林风",
+              "detail": "全服首杀？听起来就让人热血沸腾。干掉它，我能升到多少级？（燃，一字一顿）"
+            }
+          ],
+          "_audio_group": "配音"
+        }
+      ],
+      "tail_frame": "林风与BOSS正面相对，战刀横握 → 本集结束，下集首帧接\"BOSS战开打\""
+    }
+  ]
+}
