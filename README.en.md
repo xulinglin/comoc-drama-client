@@ -26,9 +26,10 @@ A local desktop application built with Vue 3, pywebview, Python, and Playwright 
 ## Getting Started
 
 1. **Start the client**: run `CDTV.exe` from an existing packaged distribution. To run from source, follow the [development guide](docs/DEVELOPMENT.en.md).
+   macOS adaptation code and a separate `.app` build configuration are available; see [macOS instructions](docs/DEVELOPMENT.md#macos-运行与打包). This path has not been tested on a Mac.
 2. **Create a project**: organize chapters, edit the Markdown script, and add local assets.
 3. **Prepare storyboards**: create a video task and edit shots, or import creation-data JSON as described below.
-4. **Set up OriginalDoubao**: add an account under settings and open its browser to log in. Web automation requires `runtime/chrome-win64/chrome.exe` under the application directory.
+4. **Set up OriginalDoubao**: add an account under settings and open its browser to log in. Windows automation requires `runtime/chrome-win64/chrome.exe` under the application directory; macOS uses a Mac browser bundle or locally installed Google Chrome.
 5. **Generate and review**: attach images, enter the video description, select supported settings, then submit and review the returned task progress.
 
 The client itself needs no login; OriginalDoubao web generation uses a separate OriginalDoubao login. Local project editing and asset management work without model API configuration.

@@ -8,6 +8,8 @@
 
 ## 环境要求（源码运行）
 
+以下安装与打包命令面向 Windows；Mac 步骤见下方“macOS 运行与打包”。
+
 - Windows 10 / 11
 - Python 3.11+
 - Node.js 20.19+（20.x）或 22.12+；建议使用满足此范围的 LTS 版本
@@ -50,6 +52,45 @@ npm run dev
 ```powershell
 .venv\Scripts\python launcher.py --dev
 ```
+
+## macOS 运行与打包
+
+首次安装可按 [Mac 用户安装、浏览器配置与打包说明](MAC_SETUP.md) 逐步操作。
+
+已加入 macOS 适配代码，尚未进行 Mac 实机验证。Windows 仍使用原来的 `.bat`、`launcher.spec`、浏览器路径和数据目录。
+
+Mac 需要 Python 3.11+、满足上方版本要求的 Node.js，以及安装在 `/Applications` 或 `~/Applications` 下的 Google Chrome。请在 Mac 上重新安装依赖，不要复制 Windows 的 `.venv`、`node_modules` 或 `chrome.exe`。
+
+从项目根目录执行：
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-macos.txt
+cd frontend
+npm ci
+npm run build
+cd ..
+.venv/bin/python launcher.py
+```
+
+也可执行 `bash ./启动应用.command`；若希望在 Finder 双击启动，先执行 `chmod +x ./启动应用.command`。该脚本使用构建后的前端页面；仅在构建产物不存在时构建前端。前端修改后需重新执行 `npm run build`，或在两个终端分别运行 `npm run dev`（`frontend/` 下）和 `.venv/bin/python launcher.py --dev`（项目根目录下）。
+
+Mac 自动化优先查找对应芯片架构的内置 Chrome for Testing，随后查找本机 Chrome / Chrome for Testing / Chromium。源码态的可选内置浏览器路径为 `runtime/chrome-mac-arm64/chrome.app/Contents/MacOS/Google Chrome for Testing`（Apple Silicon）或对应的 `chrome-mac-x64` 目录（Intel）。不自动下载浏览器。Dola 人工登录与后续生成继续复用同一浏览器及独立 Profile；Mac 的自动化浏览器保留可见窗口。
+
+Mac 使用原生窗口边框进行拖动和缩放；文件与目录使用 Finder 打开，复制素材使用系统文件剪贴板。浏览器能否接收多文件粘贴仍需实机确认。
+
+源码运行仍将数据存入项目的 `data/`、`output/`；打包 `.app` 后改为 `~/Library/Application Support/CDTV/data/` 和 `~/Library/Application Support/CDTV/output/`，避免向应用包内写数据。源码数据不会自动迁移到 `.app`：如需继续使用，关闭两端客户端后复制 `data/`，并在设置中心检查存储和输出目录。跨系统复制项目数据后需重新检查素材绝对路径；建议在 Mac 重新登录账号，不直接复用 Windows Chrome Profile。
+
+在 **Mac 本机**构建 `.app`：
+
+```bash
+.venv/bin/python -m pip install 'pyinstaller>=6'
+.venv/bin/python -m PyInstaller launcher.macos.spec --noconfirm --clean
+```
+
+构建前先完成上述前端构建；产物为 `dist/CDTV.app`，可复制到“应用程序”目录。默认使用接收者已安装的 Mac Chrome，浏览器不随 `.app` 打包。构建使用当前 Python 的架构，Apple Silicon 与 Intel 版本需分别在对应架构环境构建。该配置未进行构建验证，也未配置用于公开分发的 Developer ID 签名与公证。
+
+视频兼容转换等依赖 FFmpeg 的功能仍需安装 `ffmpeg` / `ffprobe`。从 Finder 启动时会补充 `/opt/homebrew/bin`、`/usr/local/bin` 到工具搜索路径。
 
 ---
 

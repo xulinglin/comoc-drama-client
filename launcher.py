@@ -13,6 +13,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -938,6 +939,13 @@ class DesktopApi:
         """
         if self._window is None:
             return False
+        if sys.platform == "darwin" and self._window.native is not None:
+            from PyObjCTools import AppHelper
+
+            # Cocoa 的 restore() 只负责取消最小化；使用原生 zoom 切换窗口大小。
+            AppHelper.callAfter(self._window.native.zoom_, None)
+            self._window_maximized = not self._window_maximized
+            return self._window_maximized
         if os.name == "nt" and self._window.native is not None:
             hwnd = int(self._window.native.Handle.ToInt64())
             user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -1269,8 +1277,12 @@ class DesktopApi:
         }
 
     def copy_files_to_clipboard(self, file_paths: list[str]) -> dict[str, int]:
-        """Copy an ordered list of local files to the Windows clipboard."""
+        """Copy an ordered list of local files to the system clipboard."""
 
+        if sys.platform == "darwin":
+            from macos_support import copy_files
+
+            return copy_files(file_paths)
         if os.name != "nt":
             raise ValueError("当前系统不支持复制多张参考图")
         paths = [str(Path(str(value)).resolve()) for value in file_paths]
@@ -1812,6 +1824,7 @@ class DesktopApi:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         return {
             "mode": "browser",
+            "platform": sys.platform,
             "apiBase": STORAGE_API_BASE_URL,
             "storageBase": STORAGE_API_BASE_URL,
             "storageReady": self._storage_available(),
@@ -1919,6 +1932,8 @@ class DesktopApi:
     def _has_saved_original_doubao_session(self, account_id: str) -> bool:
         domain = account_platform(self._find_account(account_id))["domain"]
         cookie_db = ACCOUNTS_DIR / account_id / "profile" / "Default" / "Network" / "Cookies"
+        if sys.platform == "darwin" and not cookie_db.is_file():
+            cookie_db = ACCOUNTS_DIR / account_id / "profile" / "Default" / "Cookies"
         if not cookie_db.is_file():
             return False
         try:
@@ -2341,16 +2356,23 @@ class DesktopApi:
         result = self._window.create_file_dialog(webview.FileDialog.FOLDER)
         return str(Path(result[0]).resolve()) if result else None
 
+    @staticmethod
+    def _open_native_path(path: Path) -> None:
+        if sys.platform == "darwin":
+            subprocess.run(["/usr/bin/open", str(path)], check=True)
+        else:
+            os.startfile(path)
+
     def open_output_directory(self) -> bool:
         output_dir = Path(self.get_settings()["outputDir"]).resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
-        os.startfile(output_dir)
+        self._open_native_path(output_dir)
         return True
 
     def open_storage_directory(self) -> bool:
         storage_dir = Path(self.get_settings()["storageDir"]).resolve()
         storage_dir.mkdir(parents=True, exist_ok=True)
-        os.startfile(storage_dir)
+        self._open_native_path(storage_dir)
         return True
 
     def open_path(self, target: str) -> bool:
@@ -2358,7 +2380,7 @@ class DesktopApi:
         path = Path(str(target or "")).expanduser().resolve()
         if not path.exists():
             raise ValueError("路径不存在")
-        os.startfile(path)
+        self._open_native_path(path)
         return True
 
     @staticmethod
@@ -2426,7 +2448,10 @@ class DesktopApi:
         if os.name == "nt":
             subprocess.run(["explorer", f"/select,{path}"], check=False)
             return True
-        os.startfile(path.parent if path.is_file() else path)
+        if sys.platform == "darwin":
+            subprocess.run(["/usr/bin/open", "-R", str(path)], check=True)
+            return True
+        self._open_native_path(path.parent if path.is_file() else path)
         return True
 
     def select_tree_directory(self) -> str | None:
@@ -3709,6 +3734,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if sys.platform == "darwin":
+        # 从 Finder 启动时 PATH 不含 Homebrew，保留原路径并补上常见工具目录。
+        os.environ["PATH"] = os.pathsep.join([
+            os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"),
+            "/opt/homebrew/bin", "/usr/local/bin",
+        ])
     # WebView2 的右键“另存为”最终会进入 pywebview 的下载事件。
     # 默认关闭下载会导致菜单可见但点击后没有任何结果；开启后由
     # pywebview 弹出 Windows 原生保存窗口并写入用户选择的位置。
@@ -3740,7 +3771,7 @@ def main() -> None:
         min_size=(min_w, min_h),
         resizable=True,
         background_color="#090d18",
-        frameless=True,
+        frameless=sys.platform != "darwin",
         easy_drag=False,
         shadow=False,
     )
@@ -3752,7 +3783,11 @@ def main() -> None:
     window.events.shown += api._install_native_window_proc
     # 关闭前还原 wndproc，避免退出崩溃
     window.events.closing += api._uninstall_native_window_proc
-    webview.start(debug=args.dev, icon=str(APP_ICON) if APP_ICON.exists() else None)
+    webview.start(
+        debug=args.dev,
+        icon=str(APP_ICON) if APP_ICON.exists() else None,
+        gui="cocoa" if sys.platform == "darwin" else None,
+    )
 
 
 if __name__ == "__main__":

@@ -10,8 +10,10 @@ video / image 两条流程共用的底层能力集中在这里：浏览器线程
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
+import sys
 import threading
 import time
 from typing import TYPE_CHECKING, Any
@@ -34,6 +36,8 @@ class ManualOperationRequired(RuntimeError):
 def _secondary_monitor_chrome_args(account_id: str) -> list[str]:
     """Place visible automation Chrome windows on a non-primary Windows display."""
 
+    if sys.platform == "darwin":
+        return []
     try:
         import ctypes
         from ctypes import wintypes
@@ -142,13 +146,17 @@ class BaseAccountBrowserWorker:
         try:
             playwright = sync_playwright().start()
             executable = resolve_dola_browser(profile_dir) if self.account_type == "dola" else BUNDLED_CHROME
+            if sys.platform == "darwin" and self.account_type != "dola":
+                from macos_support import resolve_chrome
+
+                executable = resolve_chrome()
             if not executable.is_file():
                 raise RuntimeError(f"内置浏览器不存在：{executable}")
             # OriginalDoubao 风控会识别 headless 浏览器，headless 下登录会话不被认可，
             # 导致后台生成卡在"已提交到 OriginalDoubao"。因此始终使用真实（非 headless）
             # 浏览器：前台放副屏，后台无副屏时把窗口放到屏幕外，不影响用户。
             chrome_args = _secondary_monitor_chrome_args(self.account_id)
-            if not self.visible and not chrome_args:
+            if os.name == "nt" and not self.visible and not chrome_args:
                 chrome_args = ["--window-position=-32000,-32000"]
             context = playwright.chromium.launch_persistent_context(
                 user_data_dir=str(profile_dir),

@@ -8,6 +8,8 @@ This document is for developers: running from source, building, frontend develop
 
 ## Requirements (Running from Source)
 
+The commands below target Windows. For macOS source setup and the separate `.app` build configuration, see [macOS instructions](DEVELOPMENT.md#macos-运行与打包). macOS adaptation has not been tested on a Mac; Windows continues to use its existing launch scripts, packaging configuration, browser path and data directories.
+
 - Windows 10 / 11
 - Python 3.11+
 - Node.js 20.19+ (20.x) or 22.12+; use an LTS release that meets this range

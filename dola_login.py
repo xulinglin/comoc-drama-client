@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 from constants import BUNDLED_CHROME
 
@@ -25,6 +26,10 @@ def resolve_dola_browser(profile_dir: Path, *, for_login: bool = False) -> Path:
         if not for_login:
             raise RuntimeError("Dola 登录使用的 Chrome 已不可用，请重新打开登录窗口")
     # 历史账号仍沿用内置浏览器；人工登录时才选择本机 Chrome。
+    if sys.platform == "darwin":
+        from macos_support import resolve_chrome
+
+        return resolve_chrome()
     if for_login:
         candidates = []
         if os.name == "nt":

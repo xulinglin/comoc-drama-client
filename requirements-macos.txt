@@ -1,0 +1,6 @@
+-r requirements.txt
+pyobjc-core
+pyobjc-framework-Cocoa
+pyobjc-framework-Quartz
+pyobjc-framework-WebKit
+pyobjc-framework-Security

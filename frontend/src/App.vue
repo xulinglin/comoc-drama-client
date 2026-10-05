@@ -1033,7 +1033,9 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
-    <i v-for="edge in ['top', 'right', 'bottom', 'left', 'top-left', 'top-right', 'bottom-left', 'bottom-right']" :key="edge" :class="['resize-handle', `resize-${edge}`]" @mousedown.prevent="startWindowResize(edge)"></i>
+    <template v-if="appInfo?.platform !== 'darwin'">
+      <i v-for="edge in ['top', 'right', 'bottom', 'left', 'top-left', 'top-right', 'bottom-left', 'bottom-right']" :key="edge" :class="['resize-handle', `resize-${edge}`]" @mousedown.prevent="startWindowResize(edge)"></i>
+    </template>
 
     <div v-if="authChecking" class="auth-loading" role="status" aria-live="polite">
       <BaseLoadingState size="lg" text="正在验证登录状态…" description="CDTV Studio" />

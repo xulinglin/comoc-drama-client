@@ -26,9 +26,10 @@
 ## 快速上手
 
 1. **启动客户端**：已有打包版本时运行 `CDTV.exe`；源码运行按 [开发指南](docs/DEVELOPMENT.md) 安装依赖并启动。
+   Mac 已加入适配代码，按步骤操作见 [Mac 用户安装说明](docs/MAC_SETUP.md)，开发与构建细节见 [macOS 运行与打包](docs/DEVELOPMENT.md#macos-运行与打包)；尚未进行 Mac 实机验证。
 2. **建立项目**：创建项目和章节，编辑 Markdown 剧本，添加本地素材。
 3. **准备分镜**：建立视频创作任务，逐条填写分镜，或按下方说明导入创作数据 JSON。
-4. **配置 OriginalDoubao 账号**：在设置中心添加账号，打开该账号的浏览器并手动登录。网页自动化需要应用目录下的 `runtime/chrome-win64/chrome.exe`。
+4. **配置 OriginalDoubao 账号**：在设置中心添加账号，打开该账号的浏览器并手动登录。Windows 网页自动化需要应用目录下的 `runtime/chrome-win64/chrome.exe`；Mac 查找 Mac 版内置浏览器或本机 Google Chrome。
 5. **生成与预览**：为分镜选择图片、填写视频描述和支持的参数，提交后查看任务进度与生成结果。
 
 客户端本身免登录，OriginalDoubao 网页生成需要单独登录 OriginalDoubao。只做本地项目编辑和素材管理时，不需要配置模型 API。

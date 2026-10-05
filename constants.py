@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -25,6 +26,13 @@ FRONTEND_DIST = BUNDLE_DIR / "frontend" / "dist" / "index.html"
 APP_ICON = ROOT / "assets" / "app-icon.ico"
 DATA_DIR = ROOT / "data"
 OUTPUT_DIR = ROOT / "output"
+if sys.platform == "darwin":
+    APP_ICON = BUNDLE_DIR / "assets" / "app-icon.png"
+    if getattr(sys, "frozen", False):
+        # .app 内的资源不用于存储可写数据，也避免升级覆盖用户数据。
+        user_root = Path.home() / "Library" / "Application Support" / "CDTV"
+        DATA_DIR = user_root / "data"
+        OUTPUT_DIR = user_root / "output"
 STORAGE_DIR = DATA_DIR / "storage"
 ACCOUNTS_DIR = DATA_DIR / "accounts"
 ACCOUNTS_FILE = DATA_DIR / "accounts.json"
@@ -34,9 +42,14 @@ CREDENTIALS_FILE = DATA_DIR / "credentials.json"
 GENERATION_TASKS_FILE = DATA_DIR / "generation_tasks.json"
 ORIGINAL_DOUBAO_URL = "https://www.doubao.com/"
 BUNDLED_CHROME = ROOT / "runtime" / "chrome-win64" / "chrome.exe"
+if sys.platform == "darwin":
+    chrome_folder = "chrome-mac-arm64" if platform.machine().lower() in {"arm64", "aarch64"} else "chrome-mac-x64"
+    BUNDLED_CHROME = ROOT / "runtime" / chrome_folder / "chrome.app" / "Contents" / "MacOS" / "Google Chrome for Testing"
 API_BASE_URL = os.environ.get("COMIC_DRAMA_API_BASE", "http://127.0.0.1:8080").rstrip("/")
 STORAGE_API_BASE_URL = os.environ.get("COMIC_DRAMA_STORAGE_API_BASE", "http://127.0.0.1:18081").rstrip("/")
 STORAGE_SERVICE_JAR = ROOT / "storage" / "comic-drama-storage.jar"
 BUNDLED_JAVA = ROOT / "runtime" / "jre" / "bin" / "javaw.exe"
+if sys.platform == "darwin":
+    BUNDLED_JAVA = ROOT / "runtime" / "jre" / "bin" / "java"
 API_HOST = (urlparse(API_BASE_URL).hostname or "").lower()
 API_TRUST_ENV = API_HOST not in {"127.0.0.1", "localhost", "::1"}
