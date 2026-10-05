@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 
 from original_doubao_base import BaseAccountBrowserWorker, ManualOperationRequired, _secondary_monitor_chrome_args
+from constants import output_dir_for
 
 
 # 保存图片时优先尝试的扩展名顺序；无法从 URL 或响应头判断时使用默认 .png。
@@ -55,7 +56,7 @@ def _image_suffix_from_url(media_url: str) -> str:
 def save_image_url(media_url: str, task_id: str, settings: dict[str, Any], *, referer: str = "https://www.doubao.com/") -> Path:
     """Download one generated image URL to the output directory."""
 
-    output_dir = Path(str(settings["outputDir"])).resolve()
+    output_dir = output_dir_for(settings)
     output_dir.mkdir(parents=True, exist_ok=True)
     suffix = _image_suffix_from_url(media_url)
     output_path = output_dir / f"original_doubao_{task_id}{suffix}"
@@ -549,7 +550,7 @@ class OriginalDoubaoImageWorker(BaseAccountBrowserWorker):
             marker = ";base64,"
             if marker in raw:
                 content = base64.b64decode(raw.split(marker, 1)[1])
-                output_dir = Path(str(self.api.get_settings()["outputDir"])).resolve()
+                output_dir = output_dir_for(self.api.get_settings())
                 output_dir.mkdir(parents=True, exist_ok=True)
                 output_path = output_dir / f"original_doubao_{task_id}{_image_suffix_from_url(media_url)}"
                 output_path.write_bytes(content)

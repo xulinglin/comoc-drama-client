@@ -84,5 +84,5 @@ test('domestic login does not expose manual completion', async () => {
   form.accounts.value[0].accountType = 'doubao'
   await form.openSelectedAccount()
   assert.equal(form.accounts.value[0].manualLoginPending, undefined)
-  assert.match(descriptor.template.content, /v-if="selectedAccount\?\.accountType === 'dola' && selectedAccount\?\.manualLoginPending"/)
+  assert.match(descriptor.template.content, /v-if="account.accountType === 'dola' && account.manualLoginPending"/)
 })

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import UiSelect from './components/UiSelect.vue'
 import WorkspaceLibraries from './components/WorkspaceLibraries.vue'
 import ProjectDetail from './components/ProjectDetail.vue'
@@ -32,12 +32,30 @@ let accountSelectionReady = false
 const showSettings = ref(false)
 const showProjectFiles = ref(false)
 const settingsTab = ref('accounts')
-const newAccountName = ref('')
-const newAccountType = ref('doubao')
+const newAccountNames = reactive({})
 const creatingAccount = ref(false)
+const accountSearch = ref('')
+const accountPlatformFilter = ref('all')
+const accountStatusFilter = ref('all')
+const platformPanelOpen = ref(false)
+const accountStatusOptions = [
+  { value: 'available', label: '可用' },
+  { value: 'pending', label: '待登录' },
+  { value: 'expired', label: '登录过期' },
+  { value: 'running', label: '运行中' },
+  { value: 'exhausted', label: '额度耗尽' },
+]
 const accountTypeOptions = [
   { label: 'OriginaDoubao', value: 'doubao' },
   { label: 'Dola', value: 'dola' },
+]
+const accountPlatformFilterOptions = [
+  { label: '全部平台', value: 'all' },
+  ...accountTypeOptions,
+]
+const accountStatusFilterOptions = [
+  { label: '全部状态', value: 'all' },
+  ...accountStatusOptions,
 ]
 
 function accountTypeLabel(account) {
@@ -46,8 +64,22 @@ function accountTypeLabel(account) {
 const accountMessage = ref('')
 const openingAccountId = ref('')
 const completingAccountId = ref('')
-const settings = ref({ defaultAccountId: '', outputDir: '', storageDir: '', autoDownload: true, dailyVideoQuota: 3, dolaDailyVideoQuota: 4 })
+const settings = ref({ defaultAccountId: '', storageDir: '', autoDownload: true, dailyVideoQuota: 3, dolaDailyVideoQuota: 4 })
 const settingsMessage = ref('')
+// 存储目录结构详情默认隐藏，点击后展开。
+const showStorageStructure = ref(false)
+// 项目存储目录内的固定子目录 / 文件，与 local_storage.py、constants.py 保持一致。
+const storageStructure = [
+  { path: 'storage.db', desc: 'SQLite 数据库，存放项目、章节、素材、视频任务、模型、提示词与额度等记录' },
+  { path: 'files/', desc: '文件桶根目录（各桶下按 files/<bucket>/<id>/content.bin 存放）' },
+  { path: 'files/assets/', desc: '素材库上传的图片 / 音频 / 视频' },
+  { path: 'files/generated-images/', desc: 'AI 生成的图片（关键帧等）' },
+  { path: 'files/generated-videos/', desc: 'AI 生成的视频' },
+  { path: 'files/generated-audio/', desc: '音色试听与生成的音频' },
+  { path: 'files/files/', desc: '通用文件桶（上传未指定 bucket 时的默认位置）' },
+  { path: 'files/<自定义 bucket>/', desc: '上传接口 bucket 字段指定的任意文件桶' },
+  { path: 'output/', desc: '视频输出目录，成片结果保存在此' },
+]
 const editingAccountId = ref('')
 const editingAccountName = ref('')
 const renamingAccountId = ref('')
@@ -57,9 +89,9 @@ const draggingAccountId = ref('')
 const dragOverAccountId = ref('')
 const accountOrderSaving = ref(false)
 // 单账号粒度的校验状态：{ [id]: { status: 'checking'|'ok'|'expired'|'failed', message, detail, at } }
-// status 不含 idle——没记录过就是没校验过，避免与卡片本身状态混淆。
+// status 不含 idle——没记录过就是没校验过，避免与账号本身状态混淆。
 const accountVerifyState = ref({})
-// 正在校验中的账号 id 集合，用于禁用对应卡片按钮（不阻塞其他账号操作）。
+// 正在校验中的账号 id 集合，用于禁用对应行按钮（不阻塞其他账号操作）。
 const accountVerifyingIds = ref(new Set())
 // 批量校验整体进度：{ running, total, done, ok, expired, failed, cancelled }
 const accountVerifyBatch = ref(null)
@@ -105,6 +137,15 @@ const dockTasks = computed(() => globalTasks.value.filter(tk => {
 }))
 
 const runningTaskCount = computed(() => dockTasks.value.filter(isActiveTask).length)
+
+function toggleTaskDock() {
+  if (sidebarCollapsed.value) {
+    sidebarCollapsed.value = false
+    taskDockCollapsed.value = false
+    return
+  }
+  taskDockCollapsed.value = !taskDockCollapsed.value
+}
 
 function taskStatusLabel(tk) {
   const status = String(tk?.status || '').toLowerCase()
@@ -174,6 +215,21 @@ const accountOptions = computed(() => accounts.value.map(account => ({
 })))
 // 只有曾经登录过的账号才需要校验登录状态；从未登录的账号直接跳过。
 const checkableAccounts = computed(() => accounts.value.filter(account => account.hasLoggedIn && !account.manualLoginPending))
+const accountFiltersActive = computed(() => Boolean(accountSearch.value.trim() || accountPlatformFilter.value !== 'all' || accountStatusFilter.value !== 'all'))
+const canReorderAccounts = computed(() => !accountFiltersActive.value && !accountOrderSaving.value && !editingAccountId.value)
+const accountStatusCounts = computed(() => {
+  const counts = { available: 0, pending: 0, expired: 0, running: 0, exhausted: 0 }
+  for (const account of accounts.value) counts[accountManagementStatus(account)] += 1
+  return counts
+})
+const filteredAccounts = computed(() => {
+  const search = accountSearch.value.trim().toLocaleLowerCase()
+  return accounts.value.filter(account => (
+    (!search || `${account.name} ${accountTypeLabel(account)}`.toLocaleLowerCase().includes(search))
+    && (accountPlatformFilter.value === 'all' || (account.accountType || 'doubao') === accountPlatformFilter.value)
+    && (accountStatusFilter.value === 'all' || accountManagementStatus(account) === accountStatusFilter.value)
+  ))
+})
 const generationProjectOptions = computed(() => generationProjects.value.map(project => ({ label: project.name || '未命名项目', value: String(project.id) })))
 
 function apiReady() {
@@ -200,6 +256,30 @@ function accountQuotaRemaining(account) {
   }
   return limit
 }
+
+function accountManagementStatus(account) {
+  // 每个账号只统计一次；登录和额度仍在列表中分别显示。
+  if (account.inUse) return 'running'
+  if (account.loginExpired) return 'expired'
+  if (account.manualLoginPending || account.loginCompleting || !account.authenticated) return 'pending'
+  if (accountQuotaRemaining(account) === 0) return 'exhausted'
+  return 'available'
+}
+
+function accountLoginLabel(account) {
+  if (account.loginCompleting || completingAccountId.value === account.id) return '确认登录中'
+  if (account.manualLoginPending) return '待确认登录'
+  if (account.loginExpired) return '登录已过期'
+  return account.authenticated ? '已登录' : '待登录'
+}
+
+function clearAccountFilters() {
+  accountSearch.value = ''
+  accountPlatformFilter.value = 'all'
+  accountStatusFilter.value = 'all'
+}
+
+watch([accountSearch, accountPlatformFilter, accountStatusFilter], endAccountDrag)
 
 function cachedDailyVideoQuota() {
   const value = Number.parseInt(window.localStorage.getItem('cdtv.dailyVideoQuota') || '', 10)
@@ -413,7 +493,7 @@ async function loadAccounts() {
 }
 
 function startAccountDrag(event, account) {
-  if (accountOrderSaving.value || editingAccountId.value) {
+  if (!canReorderAccounts.value) {
     event.preventDefault()
     return
   }
@@ -423,7 +503,7 @@ function startAccountDrag(event, account) {
 }
 
 function enterAccountDropTarget(account) {
-  if (draggingAccountId.value && draggingAccountId.value !== account.id) {
+  if (canReorderAccounts.value && draggingAccountId.value && draggingAccountId.value !== account.id) {
     dragOverAccountId.value = account.id
   }
 }
@@ -434,7 +514,7 @@ async function dropAccount(event, targetAccount) {
   const targetId = targetAccount.id
   dragOverAccountId.value = ''
   draggingAccountId.value = ''
-  if (!sourceId || sourceId === targetId || accountOrderSaving.value) return
+  if (!sourceId || sourceId === targetId || !canReorderAccounts.value) return
   if (typeof window.pywebview?.api?.reorder_accounts !== 'function') {
     accountMessage.value = '客户端后台尚未更新，请完全退出并重新启动客户端后再调整顺序'
     return
@@ -468,11 +548,10 @@ function endAccountDrag() {
   dragOverAccountId.value = ''
 }
 
-async function createAccount() {
+async function createAccount(accountType = 'doubao') {
   if (creatingAccount.value) return
   accountMessage.value = ''
-  const name = newAccountName.value.trim()
-  const accountType = newAccountType.value
+  const name = String(newAccountNames[accountType] || '').trim()
   if (!name) {
     accountMessage.value = '请输入账号名称'
     return
@@ -498,8 +577,9 @@ async function createAccount() {
     if (!account?.id) throw new Error('添加账号未返回有效结果，请重新启动客户端后重试')
     const createdAccount = { ...account, accountType: account.accountType || 'doubao' }
     accounts.value = [...accounts.value.filter(item => item.id !== account.id), createdAccount]
-    newAccountName.value = ''
+    newAccountNames[accountType] = ''
     selectedAccountId.value = account.id
+    clearAccountFilters()
     accountMessage.value = `已创建 ${accountTypeLabel(createdAccount)} 账号 ${account.name}`
   } catch (err) {
     accountMessage.value = cleanError(err)
@@ -508,13 +588,14 @@ async function createAccount() {
   }
 }
 
-async function openSelectedAccount() {
+async function openSelectedAccount(account = selectedAccount.value) {
   if (openingAccountId.value || completingAccountId.value) return
-  if (!selectedAccountId.value) {
+  const accountId = account?.id || selectedAccountId.value
+  if (!accountId) {
     accountMessage.value = '请先创建并选择一个账号'
     return
   }
-  const accountId = selectedAccountId.value
+  if (account?.inUse || isAccountVerifying(accountId) || account?.loginCompleting) return
   openingAccountId.value = accountId
   try {
     const result = await window.pywebview.api.open_account_login(accountId)
@@ -532,11 +613,11 @@ async function openSelectedAccount() {
   }
 }
 
-async function completeSelectedAccountLogin() {
+async function completeSelectedAccountLogin(targetAccount = selectedAccount.value) {
   if (completingAccountId.value || openingAccountId.value) return
-  const accountId = selectedAccountId.value
+  const accountId = targetAccount?.id || selectedAccountId.value
   const account = accounts.value.find(item => item.id === accountId)
-  if (!account?.manualLoginPending || account.accountType !== 'dola') return
+  if (!account?.manualLoginPending || account.accountType !== 'dola' || account.inUse || account.loginCompleting || isAccountVerifying(accountId)) return
   const api = apiReady()
   if (typeof api?.complete_account_login !== 'function') {
     accountMessage.value = '客户端后台尚未更新，请完全退出并重新启动客户端后再完成登录'
@@ -708,29 +789,34 @@ async function toggleAccountQuota(account) {
   }
 }
 
-async function updateDailyVideoQuota(value) {
-  const dailyQuota = Math.max(1, Math.min(Number.parseInt(value, 10) || 3, 99))
-  if (accountStateAction.value === 'daily-limit') return
+async function updateDailyVideoQuota(value, accountType = 'doubao') {
+  const isDola = accountType === 'dola'
+  const key = isDola ? 'dolaDailyVideoQuota' : 'dailyVideoQuota'
+  const dailyQuota = Math.max(1, Math.min(Number.parseInt(value, 10) || (isDola ? 4 : 3), 99))
+  if (accountStateAction.value) return
+  const previousSettings = { ...settings.value }
+  let quotaSaved = false
   accountStateAction.value = 'daily-limit'
   accountMessage.value = ''
   try {
-    settings.value.dailyVideoQuota = dailyQuota
-    window.localStorage.setItem('cdtv.dailyVideoQuota', String(dailyQuota))
+    settings.value[key] = dailyQuota
     settings.value.defaultAccountId = selectedAccountId.value
     const savedSettings = await window.pywebview.api.save_settings(settings.value)
-    settings.value = { ...savedSettings, dailyVideoQuota: dailyQuota }
+    settings.value = { ...savedSettings, [key]: dailyQuota }
+    quotaSaved = true
+    if (!isDola) window.localStorage.setItem('cdtv.dailyVideoQuota', String(dailyQuota))
     await loadAccounts()
-    accountMessage.value = `每日视频额度已自动保存为 ${dailyQuota}`
+    accountMessage.value = `${accountTypeLabel({ accountType })} 每个账号的每日视频额度已保存为 ${dailyQuota} 次`
   } catch (err) {
-    accountMessage.value = cleanError(err)
+    if (!quotaSaved) settings.value = previousSettings
+    accountMessage.value = quotaSaved ? `额度已保存，刷新失败：${cleanError(err)}` : cleanError(err)
   } finally {
     accountStateAction.value = ''
   }
 }
 
-function stepDailyVideoQuota(delta) {
-  const current = Number(settings.value.dailyVideoQuota) || 3
-  updateDailyVideoQuota(current + delta)
+function stepDailyVideoQuota(delta, accountType = 'doubao') {
+  updateDailyVideoQuota(dailyVideoQuota({ accountType }) + delta, accountType)
 }
 
 function verifyChip(accountId) {
@@ -751,7 +837,7 @@ function isBatchVerifying() {
   return Boolean(accountVerifyBatch.value?.running)
 }
 
-// 单账号校验：仅禁用该账号卡片，不影响其他账号操作。
+// 单账号校验：仅禁用该账号行，不影响其他账号操作。
 async function verifyAccountLogin(account) {
   const accountId = account.id
   if (isAccountVerifying(accountId) || isBatchVerifying()) return
@@ -812,12 +898,6 @@ async function verifyAccountLogin(account) {
 
 function toggleVerifyDetail(accountId) {
   accountVerifyDetailId.value = accountVerifyDetailId.value === accountId ? '' : accountId
-}
-
-// 过期账号直接在卡片上提供「重新登录」入口，省一步选中再点登录。
-async function reloginAccount(account) {
-  selectedAccountId.value = account.id
-  await openSelectedAccount()
 }
 
 // 并发上限 3 的批量校验；支持取消——已发起的请求等其返回，未启动的不再发起。
@@ -939,11 +1019,6 @@ function cancelVerifyAll() {
   if (!accountVerifyBatch.value?.running) return
   accountVerifyBatch.value = { ...accountVerifyBatch.value, cancelled: true }
   accountMessage.value = '正在取消校验，等待已发起的请求返回…'
-}
-
-async function chooseOutputDirectory() {
-  const selected = await window.pywebview.api.select_output_directory()
-  if (selected) settings.value.outputDir = selected
 }
 
 async function chooseStorageDirectory() {
@@ -1096,33 +1171,32 @@ onBeforeUnmount(() => {
         </button>
       </nav>
 
-      <div v-if="dockTasks.length" class="task-dock" :class="{ collapsed: sidebarCollapsed || taskDockCollapsed }">
-        <button class="task-dock-head" @click="taskDockCollapsed = !taskDockCollapsed">
-          <span class="task-dock-title">
-            <span class="task-dock-pulse" :class="{ idle: !runningTaskCount }"></span>
-            后台任务{{ runningTaskCount ? ` · ${runningTaskCount}` : '' }}
-          </span>
-          <svg class="task-dock-caret" :class="{ up: !taskDockCollapsed }" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
-        </button>
-        <div v-show="!taskDockCollapsed && !sidebarCollapsed" class="task-dock-list">
-          <div v-for="tk in dockTasks" :key="tk.id" class="task-dock-item" :class="taskStatusTone(tk)">
-            <div class="task-dock-row">
-              <span class="task-dock-name" :title="tk.taskName || tk.ownerType">{{ tk.taskName || tk.ownerType || '生成任务' }}</span>
-              <span class="task-dock-badge">{{ taskStatusLabel(tk) }}</span>
-              <button v-if="isActiveTask(tk)" class="task-dock-cancel" type="button" data-tooltip="取消任务" :disabled="cancellingTaskId === String(tk.id)" :aria-label="`取消任务 ${tk.taskName || tk.ownerType || ''}`" @click="cancelGlobalTask(tk)">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10M9 7V5h6v2M8 7l1 12h6l1-12"/></svg>
-              </button>
+      <div class="sidebar-bottom">
+        <div v-if="dockTasks.length" class="task-dock" :class="{ collapsed: taskDockCollapsed }">
+          <button class="task-dock-head" type="button" :aria-expanded="!taskDockCollapsed && !sidebarCollapsed" aria-controls="background-task-list" :data-tooltip="sidebarCollapsed ? `后台任务 · ${runningTaskCount} 个进行中` : null" @click="toggleTaskDock">
+            <span class="task-dock-title">
+              <svg class="task-dock-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8 9h8M8 13h5M8 17h3"/></svg>
+              <span class="task-dock-label">后台任务</span>
+              <span class="task-dock-count">{{ runningTaskCount || dockTasks.length }}</span>
+            </span>
+            <svg class="task-dock-caret" :class="{ up: !taskDockCollapsed }" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
+          </button>
+          <div v-show="!taskDockCollapsed && !sidebarCollapsed" id="background-task-list" class="task-dock-list">
+            <div v-for="tk in dockTasks" :key="tk.id" class="task-dock-item" :class="taskStatusTone(tk)">
+              <div class="task-dock-row">
+                <span class="task-dock-name" :title="tk.taskName || tk.ownerType">{{ tk.taskName || tk.ownerType || '生成任务' }}</span>
+                <button v-if="isActiveTask(tk)" class="task-dock-cancel" type="button" data-tooltip="取消任务" :disabled="cancellingTaskId === String(tk.id)" :aria-label="`取消任务 ${tk.taskName || tk.ownerType || ''}`" @click="cancelGlobalTask(tk)">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>
+                </button>
+              </div>
+              <div class="task-dock-meta">
+                <span class="task-dock-badge">{{ taskStatusLabel(tk) }}</span>
+                <span v-if="isActiveTask(tk)" class="task-dock-progress-text">{{ Math.min(100, Math.max(0, Number(tk.progress) || 0)) }}%</span>
+              </div>
+              <div v-if="isActiveTask(tk)" class="task-dock-bar"><span :style="{ width: `${Math.min(100, Math.max(0, Number(tk.progress) || 0))}%` }"></span></div>
             </div>
-            <div class="task-dock-meta">
-              <span class="task-dock-id">#{{ String(tk.id || '').slice(0, 8) }}</span>
-              <span v-if="tk.progress" class="task-dock-progress-text">{{ tk.progress }}%</span>
-            </div>
-            <div v-if="isActiveTask(tk)" class="task-dock-bar"><span :style="{ width: `${Number(tk.progress) || 0}%` }"></span></div>
           </div>
         </div>
-      </div>
-
-      <div class="sidebar-bottom">
         <div class="sidebar-account-row">
           <div class="sidebar-platform-account" :data-tooltip="`已登录：${platformUser.nickname || platformUser.username}`">
             <span class="sidebar-platform-avatar">{{ (platformUser.nickname || platformUser.username || '?').slice(0, 1) }}</span>
@@ -1323,7 +1397,7 @@ onBeforeUnmount(() => {
 
       <footer>
         <span>仅支持官方视频分享链接</span>
-        <span v-if="settings.outputDir">输出目录：{{ settings.outputDir }}</span>
+        <span v-if="settings.storageDir">输出目录：{{ settings.storageDir }}\output</span>
       </footer>
     </template>
 
@@ -1360,149 +1434,119 @@ onBeforeUnmount(() => {
 
           <div class="settings-content">
         <template v-if="settingsTab === 'accounts'">
-        <section class="account-control-bar">
-          <div class="account-control-copy">
-            <span class="account-control-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"/><path d="M4 5v14"/></svg></span>
-            <span><strong>每日生成额度</strong><small>账号默认次数：OriginaDoubao 3 次，Dola 4 次</small></span>
-          </div>
-          <div class="daily-quota-control" :class="{ saving: accountStateAction === 'daily-limit' }">
-            <span class="quota-control-label"><small>单账号上限</small><strong>每日</strong></span>
-            <span class="quota-stepper">
-              <button type="button" :disabled="accountStateAction === 'daily-limit' || settings.dailyVideoQuota <= 1" aria-label="减少每日生成额度" @click="stepDailyVideoQuota(-1)">−</button>
-              <input type="number" min="1" max="99" :value="settings.dailyVideoQuota ?? 3" :disabled="accountStateAction === 'daily-limit'" aria-label="每日视频生成额度" @change="updateDailyVideoQuota($event.target.value)" />
-              <button type="button" :disabled="accountStateAction === 'daily-limit' || settings.dailyVideoQuota >= 99" aria-label="增加每日生成额度" @click="stepDailyVideoQuota(1)">+</button>
-            </span>
-            <span class="quota-control-unit"><strong>次</strong><small>/ 天</small></span>
-          </div>
+        <div class="account-summary" aria-label="全部账号状态统计">
+          <button type="button" :class="{ active: accountStatusFilter === 'all' }" :aria-pressed="accountStatusFilter === 'all'" :disabled="Boolean(editingAccountId) || accountOrderSaving" @click="accountStatusFilter = 'all'"><span>全部账号</span><strong>{{ accounts.length }}</strong></button>
+          <button v-for="status in accountStatusOptions" :key="status.value" type="button" :class="[status.value, { active: accountStatusFilter === status.value }]" :aria-pressed="accountStatusFilter === status.value" :disabled="Boolean(editingAccountId) || accountOrderSaving" @click="accountStatusFilter = status.value"><span>{{ status.label }}</span><strong>{{ accountStatusCounts[status.value] }}</strong></button>
+        </div>
+
+        <section class="account-platform-panel" :class="{ collapsed: !platformPanelOpen }" aria-label="平台额度与账号">
+          <button type="button" class="account-platform-heading" :aria-expanded="platformPanelOpen" @click="platformPanelOpen = !platformPanelOpen">
+            <span class="account-platform-heading-text"><strong>平台额度与账号</strong><small>按平台设置每个账号的每日视频上限，并可在该平台下直接添加账号</small></span>
+            <svg class="account-platform-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <Transition name="platform-collapse">
+            <div v-show="platformPanelOpen" class="account-platform-body">
+              <div v-for="platform in accountTypeOptions" :key="platform.value" class="account-platform-row" :class="{ saving: accountStateAction === 'daily-limit' }">
+                <span class="quota-control-label"><strong>{{ platform.label }}</strong><small>每个账号 / 天</small></span>
+                <span class="quota-stepper">
+                  <button type="button" :disabled="Boolean(accountStateAction) || dailyVideoQuota({ accountType: platform.value }) <= 1" :aria-label="`减少 ${platform.label} 每日额度`" @click="stepDailyVideoQuota(-1, platform.value)">−</button>
+                  <input type="number" min="1" max="99" :value="dailyVideoQuota({ accountType: platform.value })" :disabled="Boolean(accountStateAction)" :aria-label="`${platform.label} 每个账号每日视频额度`" @change="updateDailyVideoQuota($event.target.value, platform.value)" />
+                  <button type="button" :disabled="Boolean(accountStateAction) || dailyVideoQuota({ accountType: platform.value }) >= 99" :aria-label="`增加 ${platform.label} 每日额度`" @click="stepDailyVideoQuota(1, platform.value)">+</button>
+                </span>
+                <span class="quota-control-unit">次</span>
+                <div class="account-platform-add">
+                  <input v-model="newAccountNames[platform.value]" :disabled="creatingAccount" maxlength="30" :aria-label="`新账号名称（${platform.label}）`" placeholder="输入新账号名称" @keyup.enter="createAccount(platform.value)" />
+                  <button type="button" :disabled="creatingAccount" @click="createAccount(platform.value)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>{{ creatingAccount ? '添加中…' : '添加账号' }}</button>
+                </div>
+              </div>
+            </div>
+          </Transition>
         </section>
 
         <div class="account-section-heading">
-          <span><strong>生成账号</strong><small>{{ accounts.length }} 个独立账号 · 拖动调整调用顺序</small></span>
-          <span class="account-legend"><i></i>状态正常</span>
+          <span><strong>生成账号</strong><small>{{ filteredAccounts.length }} / {{ accounts.length }} 个账号 · {{ accountOrderSaving ? '正在保存调用顺序…' : accountFiltersActive ? '清除筛选后可拖动排序' : '拖动左侧手柄调整调用顺序' }}</small></span>
+          <div class="verify-login-row">
+            <button class="verify-login-button" type="button" :disabled="isBatchVerifying() || !checkableAccounts.length" @click="verifyAllAccountsLogin">
+              <span v-if="isBatchVerifying()" class="verify-button-spinner" aria-hidden="true"></span>
+              <span>{{ isBatchVerifying() ? `正在校验 ${accountVerifyBatch.done}/${accountVerifyBatch.total}…` : `校验全部登录${checkableAccounts.length ? `（${checkableAccounts.length}）` : ''}` }}</span>
+            </button>
+            <button v-if="isBatchVerifying()" class="verify-cancel-button" type="button" @click="cancelVerifyAll">取消</button>
+          </div>
         </div>
+        <div class="account-filters">
+          <input v-model="accountSearch" type="search" placeholder="搜索账号名称或平台" aria-label="搜索账号名称或平台" :disabled="Boolean(editingAccountId) || accountOrderSaving" />
+          <UiSelect v-model="accountPlatformFilter" :options="accountPlatformFilterOptions" :disabled="Boolean(editingAccountId) || accountOrderSaving" :searchable="false" aria-label="筛选账号平台" />
+          <UiSelect v-model="accountStatusFilter" :options="accountStatusFilterOptions" :disabled="Boolean(editingAccountId) || accountOrderSaving" :searchable="false" aria-label="筛选账号状态" />
+          <button type="button" :disabled="!accountFiltersActive || Boolean(editingAccountId) || accountOrderSaving" @click="clearAccountFilters">清除筛选</button>
+        </div>
+        <p v-if="accountMessage" class="account-message" role="status" aria-live="polite">{{ accountMessage }}</p>
 
-        <div class="account-list">
-          <div
-            v-for="account in accounts"
-            :key="account.id"
-            class="account-row"
-            :class="{ selected: selectedAccountId === account.id, authenticated: account.authenticated, 'quota-exhausted': account.quotaExhaustedToday, 'in-use': account.inUse, 'not-logged-in': !account.hasLoggedIn, dragging: draggingAccountId === account.id, 'drag-over': dragOverAccountId === account.id }"
-            @click="selectedAccountId = account.id"
-            @dragenter.prevent="enterAccountDropTarget(account)"
-            @dragover.prevent
-            @drop="dropAccount($event, account)"
-          >
-            <span
-              class="account-drag-handle"
-              :class="{ disabled: accountOrderSaving }"
-              :draggable="!accountOrderSaving"
-              role="button"
-              :aria-label="`拖动调整 ${account.name} 的顺序`"
-              title="拖动调整顺序"
-              @click.stop
-              @dragstart.stop="startAccountDrag($event, account)"
-              @dragend="endAccountDrag"
-            ><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="5" cy="4" r="1"/><circle cx="11" cy="4" r="1"/><circle cx="5" cy="8" r="1"/><circle cx="11" cy="8" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="11" cy="12" r="1"/></svg></span>
-            <span class="account-avatar">{{ account.name.slice(0, 1) }}</span>
-            <span class="account-details">
-              <span class="account-name-row">
-                <input
-                  v-if="editingAccountId === account.id"
-                  v-model="editingAccountName"
-                  class="rename-input"
-                  maxlength="30"
-                  autofocus
-                  aria-label="账号名称"
-                  @click.stop
-                  @keyup.enter.stop="finishRename"
-                  @keyup.esc.stop="cancelRename"
-                />
-                <strong v-else>{{ account.name }}</strong>
-                <span v-if="editingAccountId !== account.id" class="account-card-actions">
-                  <button class="account-icon-action verify-action" type="button" :data-tooltip="isAccountVerifying(account.id) ? '正在校验…' : '校验此账号登录状态'" :aria-label="`校验 ${account.name} 登录状态`" :disabled="isAccountVerifying(account.id) || isBatchVerifying() || account.inUse || !account.hasLoggedIn" @click.stop="verifyAccountLogin(account)">
-                    <span v-if="isAccountVerifying(account.id)" class="account-icon-spinner" aria-hidden="true"></span>
-                    <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 7.8 8 9 4.6-1.2 8-4.5 8-9V6l-8-3Z"/><path d="m9.2 12 2 2 3.6-3.6"/></svg>
-                  </button>
-                  <button class="account-icon-action rename-action" type="button" data-tooltip="修改账号名称" aria-label="修改账号名称" @click.stop="beginRename(account)">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16.5-.8 4.3 4.3-.8L18.8 8.7l-3.5-3.5L4 16.5Z"/><path d="m13.8 6.7 3.5 3.5"/></svg>
-                  </button>
-                  <button class="account-icon-action rename-action delete-account-action" type="button" data-tooltip="删除账号" aria-label="删除账号" :disabled="Boolean(deletingAccountId)" @click.stop="deleteAccount(account)">
-                    <span v-if="deletingAccountId === account.id" class="account-icon-spinner" aria-hidden="true"></span>
-                    <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>
-                  </button>
-                </span>
-                <span v-else class="account-card-actions">
-                  <button class="account-icon-action rename-action" type="button" :data-tooltip="renamingAccountId === account.id ? '保存中…' : '保存账号名称'" aria-label="保存账号名称" :disabled="Boolean(renamingAccountId)" @click.stop="finishRename">
-                    <span v-if="renamingAccountId === account.id" class="account-icon-spinner" aria-hidden="true"></span>
-                    <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.2 4.2L19 7"/></svg>
-                  </button>
-                  <button class="account-icon-action rename-action" type="button" data-tooltip="取消修改" aria-label="取消修改" :disabled="Boolean(renamingAccountId)" @click.stop="cancelRename">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>
-                  </button>
-                </span>
-              </span>
-              <span class="account-type-badge" :class="account.accountType || 'doubao'">{{ accountTypeLabel(account) }}</span>
-              <small class="account-status-copy">{{ account.status }}</small>
-              <span class="account-quota-summary" :class="{ exhausted: account.quotaExhaustedToday }">
-                <span class="quota-number"><strong>{{ accountQuotaRemaining(account) }}</strong><em>/ {{ dailyVideoQuota(account) }}</em></span>
-                <span class="quota-meta"><span>今日剩余</span><span class="quota-track"><i :style="{ width: `${(accountQuotaRemaining(account) / dailyVideoQuota(account)) * 100}%` }"></i></span></span>
-              </span>
-              <template v-if="verifyChip(account.id)">
-                <button
-                  class="account-verify-chip"
-                  :class="verifyChip(account.id).tone"
-                  :disabled="!verifyChip(account.id).clickable"
-                  :aria-expanded="accountVerifyDetailId === account.id"
-                  @click.stop="verifyChip(account.id).clickable && toggleVerifyDetail(account.id)"
-                >
-                  <i v-if="verifyChip(account.id).icon === 'spinner'" class="account-verify-spinner" aria-hidden="true"></i>
-                  <em>{{ verifyChip(account.id).label }}</em>
-                </button>
-                <span v-if="accountVerifyDetailId === account.id && accountVerifyState[account.id]" class="account-verify-detail">
-                  <span class="account-verify-detail-row">{{ accountVerifyState[account.id].message }}</span>
-                  <template v-if="accountVerifyState[account.id].detail">
-                    <span class="account-verify-detail-row" v-if="accountVerifyState[account.id].detail.method">校验方式：{{ accountVerifyState[account.id].detail.method }}</span>
-                    <span class="account-verify-detail-row" v-if="accountVerifyState[account.id].detail.hasSessionCookie !== undefined">会话 Cookie：{{ accountVerifyState[account.id].detail.hasSessionCookie ? '存在' : '缺失' }}</span>
-                    <span class="account-verify-detail-row" v-if="accountVerifyState[account.id].detail.hasLoginText !== undefined">页面登录入口：{{ accountVerifyState[account.id].detail.hasLoginText ? '出现' : '未出现' }}</span>
-                    <span class="account-verify-detail-row" v-if="accountVerifyState[account.id].detail.url">当前 URL：{{ accountVerifyState[account.id].detail.url }}</span>
-                  </template>
-                  <span class="account-verify-detail-row" v-if="accountVerifyState[account.id].at">校验时间：{{ new Date(accountVerifyState[account.id].at).toLocaleTimeString() }}</span>
-                </span>
+        <div class="account-table-wrap">
+          <table class="account-table" aria-label="生成账号列表">
+            <thead><tr><th scope="col">顺序 / 名称</th><th scope="col">平台</th><th scope="col">登录状态</th><th scope="col">今日剩余</th><th scope="col">操作</th></tr></thead>
+            <tbody>
+              <template v-for="account in filteredAccounts" :key="account.id">
+                <tr class="account-table-row" :class="{ selected: selectedAccountId === account.id, dragging: draggingAccountId === account.id, 'drag-over': dragOverAccountId === account.id }" @dragenter.prevent="enterAccountDropTarget(account)" @dragover.prevent @drop="dropAccount($event, account)">
+                  <td class="account-name-cell">
+                    <div class="account-name-content">
+                      <span class="account-drag-handle" :class="{ disabled: !canReorderAccounts }" :draggable="canReorderAccounts" :aria-label="`拖动调整 ${account.name} 的顺序`" :title="accountFiltersActive ? '清除筛选后可调整顺序' : '拖动调整调用顺序'" @dragstart.stop="startAccountDrag($event, account)" @dragend="endAccountDrag"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="5" cy="4" r="1"/><circle cx="11" cy="4" r="1"/><circle cx="5" cy="8" r="1"/><circle cx="11" cy="8" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="11" cy="12" r="1"/></svg></span>
+                      <span class="account-order-number">{{ accounts.findIndex(item => item.id === account.id) + 1 }}</span>
+                      <input v-if="editingAccountId === account.id" v-model="editingAccountName" class="rename-input" maxlength="30" autofocus aria-label="账号名称" @keyup.enter.stop="finishRename" @keyup.esc.stop="cancelRename" />
+                      <button v-else type="button" class="account-select-name" :title="account.name" :aria-pressed="selectedAccountId === account.id" @click="selectedAccountId = account.id"><strong>{{ account.name }}</strong><small v-if="selectedAccountId === account.id">当前所选</small></button>
+                    </div>
+                  </td>
+                  <td class="account-platform-cell" data-label="平台"><span class="account-type-badge" :class="account.accountType || 'doubao'">{{ accountTypeLabel(account) }}</span></td>
+                  <td class="account-login-cell" data-label="登录状态">
+                    <div class="account-login-content">
+                      <span class="account-login-status" :class="{ logged: account.authenticated && !account.loginExpired && !account.manualLoginPending, expired: account.loginExpired }" :title="account.status">{{ accountLoginLabel(account) }}</span>
+                      <small v-if="account.inUse" class="account-running-status">运行中 · 已锁定</small>
+                      <small v-if="account.manualLoginPending && !account.loginCompleting">浏览器登录后点「完成登录」</small>
+                      <button v-if="verifyChip(account.id)" class="account-verify-chip" :class="verifyChip(account.id).tone" :disabled="!verifyChip(account.id).clickable" :aria-expanded="accountVerifyDetailId === account.id" @click="verifyChip(account.id).clickable && toggleVerifyDetail(account.id)">
+                        <i v-if="verifyChip(account.id).icon === 'spinner'" class="account-verify-spinner" aria-hidden="true"></i>
+                        <em>{{ verifyChip(account.id).label }}{{ verifyChip(account.id).clickable ? ' · 详情' : '' }}</em>
+                      </button>
+                    </div>
+                  </td>
+                  <td class="account-quota-cell" data-label="今日剩余">
+                    <div class="account-quota-value" :class="{ exhausted: accountQuotaRemaining(account) === 0 }"><span><strong>{{ accountQuotaRemaining(account) }}</strong> / {{ dailyVideoQuota(account) }}</span><small>{{ accountQuotaRemaining(account) === 0 ? '额度耗尽' : '次可用' }}</small></div>
+                  </td>
+                  <td class="account-actions-cell">
+                    <div class="account-row-actions">
+                      <template v-if="editingAccountId === account.id">
+                        <button type="button" class="primary" :disabled="Boolean(renamingAccountId)" @click="finishRename">{{ renamingAccountId === account.id ? '保存中…' : '保存名称' }}</button>
+                        <button type="button" :disabled="Boolean(renamingAccountId)" @click="cancelRename">取消</button>
+                      </template>
+                      <template v-else>
+                        <button v-if="account.accountType === 'dola' && account.manualLoginPending" type="button" class="primary" :disabled="Boolean(completingAccountId) || Boolean(openingAccountId) || account.loginCompleting || account.inUse || isAccountVerifying(account.id)" @click="completeSelectedAccountLogin(account)">{{ completingAccountId === account.id || account.loginCompleting ? '确认中…' : '完成登录' }}</button>
+                        <button v-else type="button" class="primary" :disabled="Boolean(openingAccountId) || Boolean(completingAccountId) || account.inUse || account.loginCompleting || isAccountVerifying(account.id)" @click="openSelectedAccount(account)">{{ openingAccountId === account.id ? '打开中…' : account.loginExpired ? '重新登录' : account.authenticated ? '打开账号' : '登录账号' }}</button>
+                        <button type="button" :disabled="isAccountVerifying(account.id) || isBatchVerifying() || account.inUse || !account.hasLoggedIn || account.manualLoginPending || Boolean(openingAccountId) || Boolean(completingAccountId)" @click="verifyAccountLogin(account)">{{ isAccountVerifying(account.id) ? '校验中…' : '校验登录' }}</button>
+                        <button type="button" :disabled="Boolean(editingAccountId)" @click="beginRename(account)">改名</button>
+                        <button type="button" class="danger" :disabled="Boolean(deletingAccountId)" @click="deleteAccount(account)">{{ deletingAccountId === account.id ? '删除中…' : '删除' }}</button>
+                        <button v-if="account.inUse" type="button" :disabled="Boolean(accountStateAction)" @click="releaseAccount(account)">{{ accountStateAction === `release:${account.id}` ? '释放中…' : '释放账号' }}</button>
+                        <button type="button" :disabled="Boolean(accountStateAction)" @click="toggleAccountQuota(account)">{{ accountStateAction === `quota:${account.id}` ? '设置中…' : account.quotaExhaustedToday ? '恢复今日额度' : '标记额度耗尽' }}</button>
+                      </template>
+                    </div>
+                  </td>
+                </tr>
+                <tr v-if="accountVerifyDetailId === account.id && accountVerifyState[account.id]" class="account-detail-row">
+                  <td colspan="5">
+                    <div class="account-verify-detail">
+                      <span class="account-verify-detail-row">{{ account.name }}：{{ accountVerifyState[account.id].message }}</span>
+                      <template v-if="accountVerifyState[account.id].detail">
+                        <span v-if="accountVerifyState[account.id].detail.method" class="account-verify-detail-row">校验方式：{{ accountVerifyState[account.id].detail.method }}</span>
+                        <span v-if="accountVerifyState[account.id].detail.hasSessionCookie !== undefined" class="account-verify-detail-row">会话 Cookie：{{ accountVerifyState[account.id].detail.hasSessionCookie ? '存在' : '缺失' }}</span>
+                        <span v-if="accountVerifyState[account.id].detail.hasLoginText !== undefined" class="account-verify-detail-row">页面登录入口：{{ accountVerifyState[account.id].detail.hasLoginText ? '出现' : '未出现' }}</span>
+                        <span v-if="accountVerifyState[account.id].detail.url" class="account-verify-detail-row">当前 URL：{{ accountVerifyState[account.id].detail.url }}</span>
+                      </template>
+                      <span v-if="accountVerifyState[account.id].at" class="account-verify-detail-row">校验时间：{{ new Date(accountVerifyState[account.id].at).toLocaleTimeString() }}</span>
+                    </div>
+                  </td>
+                </tr>
               </template>
-              <span class="account-state-actions">
-                <button v-if="verifyChip(account.id)?.tone === 'expired'" type="button" class="relogin-action" :disabled="Boolean(accountStateAction)" @click.stop="reloginAccount(account)">重新登录</button>
-                <button v-if="account.inUse" type="button" :disabled="Boolean(accountStateAction)" @click.stop="releaseAccount(account)">{{ accountStateAction === `release:${account.id}` ? '释放中…' : '释放账号' }}</button>
-                <button type="button" :disabled="Boolean(accountStateAction)" @click.stop="toggleAccountQuota(account)">{{ accountStateAction === `quota:${account.id}` ? '设置中…' : account.quotaExhaustedToday ? '恢复今日额度' : '设为今日无额度' }}</button>
-              </span>
-            </span>
-            <svg v-if="account.inUse" class="account-lock-icon" viewBox="0 0 24 24" aria-label="账号运行中并已锁定"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
-            <i v-else class="account-status-dot" aria-hidden="true"></i>
-          </div>
-          <div v-if="!accounts.length" class="no-accounts">还没有账号配置</div>
+              <tr v-if="!filteredAccounts.length"><td colspan="5" class="account-empty">{{ accounts.length ? '没有匹配的账号，请调整或清除筛选' : '还没有生成账号，请在上方添加' }}</td></tr>
+            </tbody>
+          </table>
         </div>
-
-        <section class="account-footer-panel">
-          <div class="new-account">
-            <select v-model="newAccountType" :disabled="creatingAccount" aria-label="新账号类型">
-              <option v-for="option in accountTypeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-            </select>
-            <input v-model="newAccountName" :disabled="creatingAccount" maxlength="30" aria-label="新账号名称" placeholder="输入账号名称，例如：主账号" @keyup.enter="createAccount" />
-            <button type="button" :disabled="creatingAccount" @click="createAccount"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>{{ creatingAccount ? '添加中…' : '添加账号' }}</button>
-          </div>
-          <p v-if="accountMessage" class="account-message" role="status" aria-live="polite">{{ accountMessage }}</p>
-          <div class="account-footer-actions">
-            <button v-if="selectedAccount?.accountType === 'dola' && selectedAccount?.manualLoginPending" class="login-button" type="button" :disabled="Boolean(completingAccountId) || selectedAccount?.loginCompleting" @click="completeSelectedAccountLogin">{{ completingAccountId || selectedAccount?.loginCompleting ? '正在确认登录…' : '完成登录' }}</button>
-            <button v-else class="login-button" :disabled="!selectedAccountId || Boolean(openingAccountId) || Boolean(completingAccountId)" @click="openSelectedAccount">{{ openingAccountId ? '正在打开…' : selectedAccount?.authenticated ? '打开所选账号' : '登录所选账号' }}</button>
-            <div class="verify-login-row">
-          <button class="verify-login-button" type="button" :disabled="isBatchVerifying() || !checkableAccounts.length" @click="verifyAllAccountsLogin">
-            <span v-if="isBatchVerifying()" class="verify-button-spinner" aria-hidden="true"></span>
-            <span>{{ isBatchVerifying() ? `正在校验 ${accountVerifyBatch.done}/${accountVerifyBatch.total}…` : `校验全部登录${checkableAccounts.length ? `（${checkableAccounts.length}）` : ''}` }}</span>
-          </button>
-          <button v-if="isBatchVerifying()" class="verify-cancel-button" type="button" @click="cancelVerifyAll">取消</button>
-            </div>
-          </div>
-          <p v-if="selectedAccount?.accountType === 'dola'" class="account-message">在浏览器中登录后，返回这里点击“完成登录”。软件会关闭专用窗口并确认登录。</p>
-        </section>
         <div v-if="accountVerifyBatch" class="account-verify-progress">
           <div class="account-verify-progress-bar">
             <span class="account-verify-progress-fill" :style="{ width: `${accountVerifyBatch.total ? (accountVerifyBatch.done / accountVerifyBatch.total) * 100 : 0}%` }"></span>
@@ -1515,33 +1559,55 @@ onBeforeUnmount(() => {
           </div>
         </div>
         </template>
-
         <ModelManagerPanel v-else-if="settingsTab === 'models'" :token="authToken" />
 
         <template v-else>
           <div class="settings-form">
-            <label>默认账号</label>
-            <UiSelect v-model="selectedAccountId" :options="accountOptions" placeholder="未选择" />
-
-            <label>视频输出目录</label>
-            <div class="directory-row">
-              <input v-model="settings.outputDir" readonly />
-              <button @click="chooseOutputDirectory">选择</button>
-              <button @click="openOutputDirectory">打开</button>
+            <div class="settings-grid">
+              <label class="settings-field">
+                <span>默认账号</span>
+                <UiSelect v-model="selectedAccountId" :options="accountOptions" placeholder="未选择" />
+              </label>
+              <label class="settings-field">
+                <span>自动下载结果</span>
+                <span class="settings-toggle-inline">
+                  <small>任务完成后保存到输出目录</small>
+                  <input v-model="settings.autoDownload" type="checkbox" />
+                </span>
+              </label>
             </div>
 
-            <label>项目存储目录</label>
-            <div class="directory-row">
-              <input v-model="settings.storageDir" readonly />
-              <button @click="chooseStorageDirectory">选择</button>
-              <button @click="openStorageDirectory">打开</button>
+            <div class="settings-field wide">
+              <span>项目存储目录</span>
+              <div class="directory-row">
+                <input v-model="settings.storageDir" readonly />
+                <button @click="chooseStorageDirectory">选择</button>
+                <button @click="openStorageDirectory">打开</button>
+              </div>
+              <p class="settings-storage-hint">项目数据、素材与视频输出都保存在此目录；视频结果位于其 output 子目录。修改后重启客户端生效；不会自动搬移原目录的数据。</p>
+              <button type="button" class="storage-structure-toggle" :aria-expanded="showStorageStructure" @click="showStorageStructure = !showStorageStructure">
+                <span>{{ showStorageStructure ? '隐藏子目录结构' : '显示子目录结构' }}</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true" :class="{ open: showStorageStructure }"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <div v-if="showStorageStructure" class="storage-structure">
+                <table>
+                  <thead>
+                    <tr><th>子目录 / 文件</th><th>内容</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="item in storageStructure" :key="item.path">
+                      <td><code>{{ item.path }}</code></td>
+                      <td>{{ item.desc }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
-            <p class="settings-storage-hint">项目数据与素材保存在此目录。修改后重启客户端生效；不会自动搬移原目录的数据。</p>
-
-            <label class="toggle-row"><span><strong>自动下载结果</strong><small>任务完成后保存到输出目录</small></span><input v-model="settings.autoDownload" type="checkbox" /></label>
           </div>
-          <button class="login-button" @click="saveSettings">保存设置</button>
-          <p v-if="settingsMessage" class="account-message">{{ settingsMessage }}</p>
+          <div class="settings-actions">
+            <button class="login-button" @click="saveSettings">保存设置</button>
+            <p v-if="settingsMessage" class="account-message">{{ settingsMessage }}</p>
+          </div>
         </template>
           </div>
         </div>

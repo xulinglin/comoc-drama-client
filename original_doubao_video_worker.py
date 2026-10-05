@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 
 from generation_accounts import is_platform_url
+from constants import output_dir_for
 from original_doubao_base import BaseAccountBrowserWorker, ManualOperationRequired, _secondary_monitor_chrome_args
 from original_doubao_nomark import (
     OriginalDoubaoVideoEvidence,
@@ -38,7 +39,7 @@ ORIGINAL_DOUBAO_MATERIAL_PLEDGE = "本次视频生成使用的参考图片均为
 def save_media_url(media_url: str, task_id: str, settings: dict[str, Any], *, referer: str = "https://www.doubao.com/") -> Path:
     """Download a resolved media URL without requiring a browser worker."""
 
-    output_dir = Path(str(settings["outputDir"])).resolve()
+    output_dir = output_dir_for(settings)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"original_doubao_{task_id}.mp4"
     partial_path = output_path.with_suffix(".mp4.part")
@@ -1219,7 +1220,7 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
                 with page.expect_download(timeout=15_000) as download_info:
                     option.click(timeout=5000)
                 download = download_info.value
-                output_dir = Path(str(settings["outputDir"])).resolve()
+                output_dir = output_dir_for(settings)
                 output_dir.mkdir(parents=True, exist_ok=True)
                 suffix = Path(download.suggested_filename).suffix or ".mp4"
                 output_path = output_dir / f"original_doubao_{task_id}{suffix}"
@@ -1289,7 +1290,7 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
                     with page.expect_download(timeout=15_000) as download_info:
                         control.click(timeout=5_000)
                     download = download_info.value
-                    output_dir = Path(str(settings["outputDir"])).resolve()
+                    output_dir = output_dir_for(settings)
                     output_dir.mkdir(parents=True, exist_ok=True)
                     suffix = Path(download.suggested_filename).suffix or ".mp4"
                     output_path = output_dir / f"original_doubao_{task_id}{suffix}"

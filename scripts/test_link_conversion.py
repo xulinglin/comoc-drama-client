@@ -26,7 +26,7 @@ class LinkConversionTests(unittest.TestCase):
         self.output = Path(self.temp.name) / "original.mp4"
         self.api = Mock()
         self.api._find_account.return_value = {"accountType": "dola"}
-        self.api.get_settings.return_value = {"autoDownload": True, "outputDir": self.temp.name}
+        self.api.get_settings.return_value = {"autoDownload": True, "storageDir": self.temp.name}
         self.api._media_url_for.return_value = "http://localhost/fixture.mp4"
         self.worker = OriginalDoubaoVideoWorker(self.api, "fixture", False)
         self.page = Mock(url="https://www.dola.com/chat")

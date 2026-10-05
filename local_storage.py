@@ -552,7 +552,29 @@ class _Handler(BaseHTTPRequestHandler):
 
         # 素材
         if path == "/asset/list" and method == "GET":
-            self._ok(self._filter_assets(storage.list_documents("assets"), query))
+            filtered = self._filter_assets(storage.list_documents("assets"), query)
+            page_raw = (query.get("page") or [""])[0].strip()
+            size_raw = (query.get("pageSize") or [""])[0].strip()
+            if not page_raw and not size_raw:
+                self._ok(filtered)
+                return
+            try:
+                page = int(page_raw or "1")
+                page_size = int(size_raw or "12")
+            except ValueError as exc:
+                raise StorageError(400, "page/pageSize 必须为整数") from exc
+            page = max(1, page)
+            page_size = max(1, min(page_size, 200))
+            total = len(filtered)
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            start = (page - 1) * page_size
+            self._ok({
+                "items": filtered[start:start + page_size],
+                "total": total,
+                "page": page,
+                "pageSize": page_size,
+                "totalPages": total_pages,
+            })
             return
         if path == "/asset" and method == "POST":
             body = self._with_defaults(self._read_json(), {
@@ -1084,10 +1106,18 @@ class _Handler(BaseHTTPRequestHandler):
     def _filter_assets(items: list[dict[str, Any]], query: dict[str, list[str]]) -> list[dict[str, Any]]:
         asset_type = (query.get("type") or [""])[0]
         keyword = (query.get("keyword") or [""])[0].strip().lower()
+        project_id = (query.get("projectId") or [""])[0].strip()
         result = []
         for item in items:
             if asset_type and asset_type not in ("all", item.get("type")):
                 continue
+            if project_id:
+                bound = [str(value) for value in (item.get("boundProjectIds") or [])]
+                if project_id == "__unlinked__":
+                    if bound:
+                        continue
+                elif project_id not in bound:
+                    continue
             if keyword:
                 haystack = f"{item.get('name', '')} {item.get('description', '')} {item.get('tags', '')}".lower()
                 if keyword not in haystack:

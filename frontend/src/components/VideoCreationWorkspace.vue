@@ -56,6 +56,8 @@ const audioPreviewCurrent = ref(0)
 const audioPreviewDuration = ref(0)
 const videoProjects = ref([])
 const videoProjectKeyword = ref('')
+const videoProjectFilter = ref('all')
+const UNLINKED_PROJECT_FILTER = '__unlinked__'
 const availableProjects = ref([])
 const activeVideoProject = ref(null)
 const videoProjectCreateOpen = ref(false)
@@ -498,9 +500,17 @@ const videoProjectCards = computed(() => {
 
 const filteredVideoProjectCards = computed(() => {
   const keyword = videoProjectKeyword.value.trim().toLowerCase()
-  if (!keyword) return videoProjectCards.value
-  return videoProjectCards.value.filter(project => [project.name, project.description]
-    .some(field => String(field || '').toLowerCase().includes(keyword)))
+  const projectFilter = videoProjectFilter.value
+  return videoProjectCards.value.filter(project => {
+    if (projectFilter === UNLINKED_PROJECT_FILTER) {
+      if (String(project.projectId || '').trim()) return false
+    } else if (projectFilter !== 'all' && String(project.projectId || '') !== projectFilter) {
+      return false
+    }
+    if (!keyword) return true
+    return [project.name, project.description]
+      .some(field => String(field || '').toLowerCase().includes(keyword))
+  })
 })
 
 async function loadAvailableProjects() {
@@ -519,6 +529,15 @@ const projectLinkOptions = computed(() => availableProjects.value.map(project =>
   value: String(project.id || ''),
   label: project.name || '未命名项目',
 })))
+
+const projectFilterOptions = computed(() => [
+  { value: 'all', label: '全部项目' },
+  { value: UNLINKED_PROJECT_FILTER, label: '未关联项目' },
+  ...availableProjects.value.map(project => ({
+    value: String(project.id || ''),
+    label: project.name || '未命名项目',
+  })),
+])
 
 function linkedProjectName(projectId = activeVideoProject.value?.projectId) {
   const id = String(projectId || '')
@@ -2475,6 +2494,9 @@ onBeforeUnmount(() => {
       <div class="video-project-head-copy"><span>VIDEO GENERATION WORKSPACE</span><div><h1>视频创作任务</h1><b>{{ videoProjects.length }} 个任务</b></div><p>管理资产、连续分镜与视频生成进度。</p></div>
       <div class="video-project-head-art" aria-hidden="true"><span class="video-project-hero-script"><i></i><i></i><i></i></span><span class="video-project-hero-shot video-project-hero-shot-top"></span><span class="video-project-hero-shot video-project-hero-shot-bottom"></span><svg viewBox="0 0 250 130"><path d="M90 65 C125 65 122 32 164 32M90 68 C125 68 122 98 164 98"/></svg></div>
       <div class="video-project-head-actions">
+        <div class="video-project-filter">
+          <UiSelect v-model="videoProjectFilter" :options="projectFilterOptions" aria-label="按项目筛选任务" />
+        </div>
         <label class="video-project-search">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></svg>
           <input v-model="videoProjectKeyword" type="search" placeholder="搜索任务" aria-label="搜索任务" />
@@ -2523,7 +2545,7 @@ onBeforeUnmount(() => {
           </div>
         </article>
       </div>
-      <div v-else-if="videoProjectKeyword.trim()" class="video-project-empty"><strong>没有匹配的任务</strong><span>试试其他关键词，或清空搜索重新查看全部任务。</span></div>
+      <div v-else-if="videoProjectKeyword.trim() || videoProjectFilter !== 'all'" class="video-project-empty"><strong>没有匹配的任务</strong><span>试试调整项目筛选或关键词，或清空条件重新查看全部任务。</span></div>
       <div v-else class="video-project-empty"><strong>还没有创作任务</strong><span>点击“新建任务”，开始你的第一个故事。</span></div>
     </section>
     <div v-if="videoProjectCreateOpen" class="video-project-create-backdrop" @click.self="videoProjectCreateOpen = false">
@@ -3140,8 +3162,8 @@ onBeforeUnmount(() => {
   --studio-dim: #697180;
 }
 .video-project-hub { padding-top: 28px; }
-.video-project-workspace-head { position: relative; display: flex; min-height: 176px; box-sizing: border-box; align-items: center; justify-content: space-between; gap: 38px; overflow: hidden; padding: 30px clamp(26px,4vw,50px); border: 1px solid #333; border-radius: 22px; background: #191919; box-shadow: 0 22px 60px #00000024; }
-.video-project-workspace-head::before { position: absolute; inset: 0; opacity: .32; background-image: radial-gradient(circle,#454545 1px,transparent 1px); background-size: 18px 18px; content: ''; mask-image: linear-gradient(90deg,transparent 22%,#000 54%,transparent 92%); }
+.video-project-workspace-head { position: relative; display: flex; min-height: 176px; box-sizing: border-box; align-items: center; justify-content: space-between; gap: 38px; padding: 30px clamp(26px,4vw,50px); border: 1px solid #333; border-radius: 22px; background: #191919; box-shadow: 0 22px 60px #00000024; }
+.video-project-workspace-head::before { position: absolute; inset: 0; overflow: hidden; border-radius: inherit; opacity: .32; background-image: radial-gradient(circle,#454545 1px,transparent 1px); background-size: 18px 18px; content: ''; mask-image: linear-gradient(90deg,transparent 22%,#000 54%,transparent 92%); }
 .video-project-head-copy,.video-project-head-actions { position: relative; z-index: 3; }
 .video-project-head-copy { min-width: 300px; }
 .video-project-head-copy > span { color: #2eddff; font: 800 12px/1 monospace; letter-spacing: .18em; }
@@ -3149,8 +3171,10 @@ onBeforeUnmount(() => {
 .video-project-head-copy h1 { margin: 0; color: #f3f3f3; font-size: 30px; letter-spacing: -.04em; }
 .video-project-head-copy b { padding: 3px 8px; border: 1px solid #3b3b3b; border-radius: 99px; color: #999; font-size: 12px; }
 .video-project-head-copy p { margin: 13px 0 0; color: #a6a6a6; font-size: 13px; line-height: 1.55; }
-.video-project-head-actions { display: flex; align-items: center; gap: 10px; padding: 7px; border: 1px solid #393939; border-radius: 14px; background: #222222e6; box-shadow: 0 12px 30px #0003; backdrop-filter: blur(12px); }
-.video-project-search { display: flex; width: clamp(190px,20vw,280px); height: 40px; align-items: center; gap: 10px; padding: 0 14px; border: 1px solid #3b3b3b; border-radius: 22px; background: #1a1a1a; }
+.video-project-head-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; padding: 7px; border: 1px solid #393939; border-radius: 14px; background: #222222e6; box-shadow: 0 12px 30px #0003; backdrop-filter: blur(12px); }
+.video-project-search { display: flex; width: clamp(130px,14vw,210px); min-width: 0; flex: 0 1 auto; height: 40px; align-items: center; gap: 10px; padding: 0 14px; border: 1px solid #3b3b3b; border-radius: 22px; background: #1a1a1a; }
+.video-project-filter { width: clamp(120px,13vw,180px); flex: 0 1 auto; }
+.video-project-filter :deep(.ui-select-trigger) { min-height: 40px; border-radius: 22px; background: #1a1a1a; }
 .video-project-search:focus-within { border-color: #5c5c5c; }
 .video-project-search svg { width: 17px; flex: 0 0 auto; fill: none; stroke: #787878; stroke-width: 1.7; }
 .video-project-search input { min-width: 0; flex: 1; border: 0; outline: 0; color: #eee; background: transparent; font-size: 14px; }
@@ -3158,7 +3182,7 @@ onBeforeUnmount(() => {
 .video-project-new-button { display: inline-flex; height: 40px; align-items: center; gap: 7px; padding: 0 14px; border: 1px solid #494949; border-radius: 10px; color: #fff; background: #252525; cursor: pointer; font-size: 13px; font-weight: 700; }
 .video-project-new-button:hover,.video-project-new-button:focus-visible { border-color: #45d7ff; outline: 0; background: #2b2b2b; }
 .video-project-new-button svg { width: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
-.video-project-head-art { position: absolute; z-index: 1; top: 24px; left: 51%; width: 250px; height: 130px; opacity: .46; transform: translateX(-50%); pointer-events: none; }
+.video-project-head-art { position: absolute; z-index: 1; top: 24px; left: 40%; width: 250px; height: 130px; opacity: .46; transform: translateX(-50%); pointer-events: none; }
 .video-project-head-art > svg { position: absolute; inset: 0; width: 100%; height: 100%; fill: none; stroke: #328ca3; stroke-width: 1.4; }
 .video-project-hero-script,.video-project-hero-shot { position: absolute; z-index: 2; display: block; border: 1px solid #404040; background: #1d1d1d; box-shadow: 0 7px 18px #0005; }
 .video-project-hero-script { top: 27px; left: 18px; width: 72px; height: 78px; padding: 21px 11px 8px; border-radius: 8px; transform: rotate(-3deg); }
@@ -3532,13 +3556,17 @@ onBeforeUnmount(() => {
   overflow-y: scroll;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: #555 transparent;
 }
-.asset-rail-scroll::-webkit-scrollbar { width: 8px; }
+.asset-rail-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
 .asset-rail-scroll::-webkit-scrollbar-track { background: transparent; }
-.asset-rail-scroll::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: #555; background-clip: padding-box; }
-.asset-rail-scroll::-webkit-scrollbar-thumb:hover { background: #707070; background-clip: padding-box; }
+.asset-rail-scroll::-webkit-scrollbar-thumb {
+  min-height: 44px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: #414141;
+  background-clip: padding-box;
+}
+.asset-rail-scroll::-webkit-scrollbar-thumb:hover { border-width: 2px; background: #5a5a5a; background-clip: padding-box; }
 .asset-rail-grid { grid-template-columns: 1fr; gap: 7px; }
 .asset-pick-card {
   display: grid;
@@ -3646,9 +3674,17 @@ onBeforeUnmount(() => {
   border-radius: 9px;
   background: #171717;
   box-shadow: none;
-  scrollbar-width: thin;
-  scrollbar-color: #444 transparent;
 }
+.storyboard-column::-webkit-scrollbar { width: 10px; height: 10px; }
+.storyboard-column::-webkit-scrollbar-track { background: transparent; }
+.storyboard-column::-webkit-scrollbar-thumb {
+  min-height: 44px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: #414141;
+  background-clip: padding-box;
+}
+.storyboard-column::-webkit-scrollbar-thumb:hover { border-width: 2px; background: #5a5a5a; background-clip: padding-box; }
 .storyboard-anchor-nav {
   position: fixed;
   z-index: 40;

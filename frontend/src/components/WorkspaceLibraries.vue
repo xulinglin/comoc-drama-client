@@ -20,10 +20,24 @@ const loading = ref(false)
 const error = ref('')
 const keyword = ref('')
 const activeFilter = ref('all')
+const assetProjectFilter = ref('all')
+const assetPage = ref(1)
+const assetPageSize = ref(8)
+const assetPageSizeOptions = [
+  { value: 8, label: '每页 8 条' },
+  { value: 16, label: '每页 16 条' },
+  { value: 24, label: '每页 24 条' },
+  { value: 32, label: '每页 32 条' },
+  { value: 48, label: '每页 48 条' },
+]
+const assetTotal = ref(0)
+const assetTotalPages = ref(1)
 const modalOpen = ref(false)
 const submitting = ref(false)
 const editingId = ref('')
 const deleteTarget = ref(null)
+const selectedAssetIds = ref([])
+const batchDeleteOpen = ref(false)
 const copiedId = ref('')
 const previewAsset = ref(null)
 const promptCoverPreviewSrc = ref('')
@@ -76,6 +90,8 @@ const filters = computed(() => props.section === 'prompts'
     ? [{ value: 'all', label: '全部' }, { value: 'image', label: '图片' }, { value: 'scene', label: '场景' }, { value: 'audio', label: '音频' }, { value: 'prop', label: '道具' }]
     : [])
 const displayedItems = computed(() => {
+  // 资产走服务端分页，assets.value 已经是当前页数据，无需再次切片
+  if (props.section === 'assets') return assets.value
   const query = keyword.value.trim().toLowerCase()
   return currentItems.value.filter(item => {
     const matchesFilter = activeFilter.value === 'all' || item.tag === activeFilter.value || item.type === activeFilter.value
@@ -83,6 +99,51 @@ const displayedItems = computed(() => {
     return matchesFilter && (!query || haystack.includes(query))
   })
 })
+const assetPageNumbers = computed(() => {
+  const total = assetTotalPages.value
+  const current = assetPage.value
+  const maxButtons = 5
+  let start = Math.max(1, current - Math.floor(maxButtons / 2))
+  const end = Math.min(total, start + maxButtons - 1)
+  start = Math.max(1, end - maxButtons + 1)
+  const pages = []
+  for (let i = start; i <= end; i += 1) pages.push(i)
+  return pages
+})
+const assetProjectOptions = computed(() => [
+  { value: 'all', label: '全部项目' },
+  ...allProjects.value.map(project => ({ value: String(project.id || ''), label: project.name || '未命名项目' })),
+])
+const selectedCount = computed(() => selectedAssetIds.value.length)
+const allCurrentPageSelected = computed(() => assets.value.length > 0 && assets.value.every(item => selectedAssetIds.value.includes(String(item.id))))
+const someCurrentPageSelected = computed(() => assets.value.some(item => selectedAssetIds.value.includes(String(item.id))))
+function isSelected(id) {
+  return selectedAssetIds.value.includes(String(id))
+}
+function toggleSelect(id) {
+  const key = String(id)
+  const next = selectedAssetIds.value.filter(item => item !== key)
+  if (next.length === selectedAssetIds.value.length) next.push(key)
+  selectedAssetIds.value = next
+}
+function toggleSelectAll() {
+  const pageIds = assets.value.map(item => String(item.id))
+  if (allCurrentPageSelected.value) {
+    selectedAssetIds.value = selectedAssetIds.value.filter(id => !pageIds.includes(id))
+  } else {
+    selectedAssetIds.value = Array.from(new Set([...selectedAssetIds.value, ...pageIds]))
+  }
+}
+function clearSelection() {
+  selectedAssetIds.value = []
+}
+watch([keyword, activeFilter, assetProjectFilter, assetPageSize, () => props.section], () => { assetPage.value = 1 })
+watch([keyword, activeFilter, assetProjectFilter, assetPage, assetPageSize], () => { loadSection() })
+function goAssetPage(page) {
+  const target = Math.min(Math.max(1, page), assetTotalPages.value)
+  if (target === assetPage.value) return
+  assetPage.value = target
+}
 
 function cleanError(err) {
   return String(err).replace(/^Error:\s*/, '')
@@ -100,13 +161,13 @@ async function request(method, path, body = null) {
       { id: 't1', title: '东方角色设定', description: '稳定生成国风人物形象', content: '角色正面全身设定，统一服装纹样与色彩……', tag: 'role', shared: false, owned: true, updateTime: '2026-08-16' },
       { id: 't2', title: '电影感夜景', description: '霓虹城市环境提示词', content: '雨夜街道，青色与品红色霓虹倒影，电影级光影……', tag: 'scene', shared: true, owned: false, updateTime: '2026-08-14' },
     ]
-    if (path.startsWith('/asset/list')) return [
+    if (path.startsWith('/asset/list')) return { items: [
       { id: 'a1', name: '小师妹', description: '图片', type: 'image', cover: demoAssetCover('#d9edf0', '#253b42', '小师妹 · 角色设定'), boundProjectIds: ['p2'], updateTime: '2026-08-03' },
       { id: 'a2', name: '女主-青色', description: '图片', type: 'image', cover: demoAssetCover('#dcecee', '#334a50', '女主 · 青色服装'), boundProjectIds: ['p1'], updateTime: '2026-07-30' },
       { id: 'a4', name: '女主', description: '图片', type: 'image', cover: demoAssetCover('#f0dfdf', '#563942', '女主 · 粉色服装'), boundProjectIds: ['p1'], updateTime: '2026-07-30' },
       { id: 'a5', name: '古城长街', description: '场景图', type: 'scene', cover: demoAssetCover('#1f3340', '#df8745', '古城长街 · 夜景'), boundProjectIds: ['p1', 'p2'], updateTime: '2026-07-28' },
       { id: 'a3', name: '环境氛围音', description: '街道人群环境声', type: 'audio', duration: '00:32', updateTime: '2026-08-14' },
-    ]
+    ], total: 5, page: 1, pageSize: 12, totalPages: 1 }
     return null
   }
   return window.pywebview.api.backend_request(method, path, props.token, body)
@@ -119,8 +180,18 @@ async function loadSection() {
     if (props.section === 'projects') projects.value = await request('GET', '/project/list') || []
     if (props.section === 'prompts') prompts.value = await request('GET', `/prompt/list?scope=${promptScope.value}&limit=50`) || []
     if (props.section === 'assets') {
-      const [assetData, projectData] = await Promise.all([request('GET', '/asset/list'), request('GET', '/project/list')])
-      assets.value = assetData || []
+      const params = new URLSearchParams({ page: String(assetPage.value), pageSize: String(assetPageSize.value) })
+      const typeFilter = activeFilter.value === 'all' ? '' : activeFilter.value
+      if (typeFilter) params.set('type', typeFilter)
+      if (assetProjectFilter.value !== 'all') params.set('projectId', assetProjectFilter.value)
+      if (keyword.value.trim()) params.set('keyword', keyword.value.trim())
+      const [assetData, projectData] = await Promise.all([request('GET', `/asset/list?${params.toString()}`), request('GET', '/project/list')])
+      const envelope = Array.isArray(assetData) ? { items: assetData } : (assetData || {})
+      assets.value = envelope.items || []
+      const pageIds = assets.value.map(item => String(item.id))
+      selectedAssetIds.value = selectedAssetIds.value.filter(id => pageIds.includes(id))
+      assetTotal.value = envelope.total ?? assets.value.length
+      assetTotalPages.value = envelope.totalPages ?? 1
       allProjects.value = projectData || []
     }
   } catch (err) {
@@ -135,6 +206,8 @@ watch(() => props.section, () => {
   activeFilter.value = 'all'
   modalOpen.value = false
   promptScope.value = 'all'
+  clearSelection()
+  batchDeleteOpen.value = false
   loadSection()
 }, { immediate: true })
 
@@ -211,6 +284,28 @@ async function submitForm() {
 
 function askDelete(item) {
   deleteTarget.value = item
+}
+
+function askBatchDelete() {
+  if (!selectedAssetIds.value.length) return
+  batchDeleteOpen.value = true
+}
+
+async function confirmBatchDelete() {
+  const ids = selectedAssetIds.value.slice()
+  if (!ids.length) return
+  submitting.value = true
+  error.value = ''
+  try {
+    await Promise.all(ids.map(id => request('DELETE', `/asset/${encodeURIComponent(id)}`)))
+    batchDeleteOpen.value = false
+    clearSelection()
+    await loadSection()
+  } catch (err) {
+    error.value = cleanError(err)
+  } finally {
+    submitting.value = false
+  }
 }
 
 async function confirmDelete() {
@@ -429,7 +524,7 @@ function typeLabel(type) {
       <header class="asset-library-head">
         <div class="asset-head-copy">
           <span class="asset-eyebrow">ASSET LIBRARY</span>
-          <div class="asset-title-line"><h1>我的资产</h1><b>{{ displayedItems.length }} 个资产</b></div>
+          <div class="asset-title-line"><h1>我的资产</h1><b>{{ assetTotal }} 个资产</b></div>
           <p>集中管理创作中使用的图片、场景、音频与道具</p>
         </div>
         <div class="asset-head-art" aria-hidden="true">
@@ -439,6 +534,7 @@ function typeLabel(type) {
           <svg viewBox="0 0 220 120"><path d="M40 60 C70 60 75 35 110 35M40 62 C70 62 75 88 110 88M115 35 C150 35 155 60 185 60M115 88 C150 88 155 62 185 62" /></svg>
         </div>
         <div class="asset-head-actions">
+          <div class="asset-project-filter"><UiSelect v-model="assetProjectFilter" :options="assetProjectOptions" aria-label="按项目筛选资产" /></div>
           <label class="asset-search">
             <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></svg>
             <input v-model="keyword" type="search" placeholder="搜索资产" aria-label="搜索资产" />
@@ -450,17 +546,24 @@ function typeLabel(type) {
       </header>
       <div class="asset-library-toolbar">
         <div class="asset-filter-tabs"><button v-for="filter in filters" :key="filter.value" :class="[`asset-filter-${filter.value}`, { active: activeFilter === filter.value }]" @click="activeFilter = filter.value"><i v-if="filter.value !== 'all'"></i>{{ filter.label === '场景' ? '场景图' : filter.label }}</button></div>
-        <span class="asset-toolbar-meta">共 {{ displayedItems.length }} 项 · 按更新时间排序</span>
+        <div class="asset-toolbar-side">
+          <label v-if="assets.length" class="asset-select-all"><input type="checkbox" :checked="allCurrentPageSelected" :indeterminate="someCurrentPageSelected && !allCurrentPageSelected" @change="toggleSelectAll" /><span>全选本页</span></label>
+          <button v-if="selectedCount" class="asset-batch-delete" @click="askBatchDelete"><svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 13a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-13M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/></svg>删除选中（{{ selectedCount }}）</button>
+          <span v-else class="asset-toolbar-meta">共 {{ assetTotal }} 项 · 按更新时间排序</span>
+        </div>
       </div>
       <p v-if="error && !modalOpen" class="library-error" role="alert">{{ error }}</p>
-      <div v-if="loading" class="asset-client-grid" aria-label="正在加载我的资产">
+      <div v-if="loading && !assets.length" class="asset-client-grid" aria-label="正在加载我的资产">
         <article v-for="n in 4" :key="n" class="asset-client-card asset-loading-card" aria-hidden="true">
           <i class="asset-loading-cover"></i>
           <div class="asset-loading-info"><b></b><span></span><footer><i></i><em></em></footer></div>
         </article>
       </div>
-      <div v-else-if="displayedItems.length" class="asset-client-grid">
-        <article v-for="item in displayedItems" :key="item.id" class="asset-client-card" :data-type="item.type">
+      <div v-else-if="displayedItems.length" class="asset-client-grid" :class="{ 'is-refreshing': loading }">
+        <article v-for="item in displayedItems" :key="item.id" class="asset-client-card" :class="{ 'is-selected': isSelected(item.id) }" :data-type="item.type">
+          <label class="asset-select-box" :aria-label="`选择 ${item.name}`" @click.stop>
+            <input type="checkbox" :checked="isSelected(item.id)" @change="toggleSelect(item.id)" />
+          </label>
           <button class="asset-client-main" type="button" :aria-label="item.type === 'audio' ? `${audioPlaying && activeAudioId === String(item.id) ? '暂停' : '播放'} ${item.name}` : `放大预览 ${item.name}`" @click="item.type === 'audio' ? toggleAudio(item) : (assetUrl(item) ? previewAsset = item : null)">
             <div class="asset-client-cover">
               <img v-if="assetUrl(item) && item.type !== 'audio'" :src="assetUrl(item)" :alt="item.name" />
@@ -480,7 +583,18 @@ function typeLabel(type) {
           <div class="asset-card-actions-client"><button data-tooltip="编辑资产" aria-label="编辑资产" @click="editAsset(item)"><svg viewBox="0 0 24 24"><path d="m4 16.5-.5 4 4-.5L19 8.5 15.5 5 4 16.5Z"/><path d="m13.5 7 3.5 3.5"/></svg></button><button class="danger" data-tooltip="删除资产" aria-label="删除资产" @click="askDelete(item)"><svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 13a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-13M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/></svg></button></div>
         </article>
       </div>
-      <div v-else class="library-empty"><svg viewBox="0 0 64 64"><rect x="12" y="13" width="40" height="38" rx="9"/><path d="M20 40l9-10 7 7 5-5 5 8"/><circle cx="25" cy="25" r="3"/></svg><strong>还没有我的资产</strong><span>点击“上传资产”添加第一份素材</span></div>
+      <nav v-if="!loading && assetTotalPages > 1" class="asset-pagination" aria-label="资产分页">
+        <div class="asset-page-size">
+          <span>每页</span>
+          <UiSelect v-model="assetPageSize" :options="assetPageSizeOptions" drop="up" :searchable="false" aria-label="每页显示数量" />
+        </div>
+        <div class="asset-page-controls">
+          <button class="asset-page-nav" :disabled="assetPage <= 1" aria-label="上一页" @click="goAssetPage(assetPage - 1)">上一页</button>
+          <button v-for="page in assetPageNumbers" :key="page" class="asset-page-num" :class="{ active: page === assetPage }" :aria-current="page === assetPage ? 'page' : undefined" @click="goAssetPage(page)">{{ page }}</button>
+          <button class="asset-page-nav" :disabled="assetPage >= assetTotalPages" aria-label="下一页" @click="goAssetPage(assetPage + 1)">下一页</button>
+        </div>
+      </nav>
+      <div v-if="!loading && !displayedItems.length" class="library-empty"><svg viewBox="0 0 64 64"><rect x="12" y="13" width="40" height="38" rx="9"/><path d="M20 40l9-10 7 7 5-5 5 8"/><circle cx="25" cy="25" r="3"/></svg><strong>还没有我的资产</strong><span>点击“上传资产”添加第一份素材</span></div>
     </template>
 
     <template v-else>
@@ -622,6 +736,10 @@ function typeLabel(type) {
       <section class="delete-dialog"><span>DELETE</span><h2>确认删除？</h2><p>“{{ deleteTarget.name || deleteTarget.title || '未命名内容' }}”删除后无法恢复。</p><footer><button @click="deleteTarget = null">取消</button><button class="danger" :disabled="submitting" @click="confirmDelete">删除</button></footer></section>
     </div>
 
+    <div v-if="batchDeleteOpen" class="library-modal-backdrop" @click.self="batchDeleteOpen = false">
+      <section class="delete-dialog"><span>DELETE</span><h2>确认批量删除？</h2><p>已选中 {{ selectedCount }} 个资产，删除后无法恢复。</p><footer><button @click="batchDeleteOpen = false">取消</button><button class="danger" :disabled="submitting" @click="confirmBatchDelete">{{ submitting ? '删除中…' : '删除' }}</button></footer></section>
+    </div>
+
     <div v-if="viewDialogOpen" class="library-modal-backdrop" @click.self="viewDialogOpen = false">
       <section class="library-modal prompt-viewer-modal">
         <header><div><span>{{ sectionMeta.eyebrow }}</span><h2>{{ viewingPrompt?.title || '查看提示词' }}</h2></div><button type="button" aria-label="关闭" @click="viewDialogOpen = false">×</button></header>
@@ -646,8 +764,8 @@ function typeLabel(type) {
 .project-workspace-page { max-width: 1540px; padding-top: 24px; }
 .prompt-library-page { width: 100%; max-width: none; box-sizing: border-box; padding: 28px clamp(16px,3vw,48px) 60px; container-type: inline-size; }
 .asset-library-page { max-width: 1540px; padding: 34px clamp(18px,3vw,46px) 60px; }
-.asset-library-head { position: relative; display: flex; min-height: 148px; align-items: center; justify-content: space-between; gap: 32px; overflow: hidden; padding: 26px clamp(22px,3vw,42px); border: 1px solid #2e2e2e; border-radius: 20px; background: #191919; box-shadow: 0 18px 50px #0000001c; }
-.asset-library-head::before { position: absolute; inset: 0; opacity: .28; background-image: radial-gradient(circle,#404040 1px,transparent 1px); background-size: 18px 18px; content: ''; mask-image: linear-gradient(90deg,transparent 18%,#000 52%,transparent 94%); }
+.asset-library-head { position: relative; display: flex; min-height: 148px; align-items: center; justify-content: space-between; gap: 32px; padding: 26px clamp(22px,3vw,42px); border: 1px solid #2e2e2e; border-radius: 20px; background: #191919; box-shadow: 0 18px 50px #0000001c; }
+.asset-library-head::before { position: absolute; inset: 0; overflow: hidden; border-radius: inherit; opacity: .28; background-image: radial-gradient(circle,#404040 1px,transparent 1px); background-size: 18px 18px; content: ''; mask-image: linear-gradient(90deg,transparent 18%,#000 52%,transparent 94%); -webkit-mask-image: linear-gradient(90deg,transparent 18%,#000 52%,transparent 94%); }
 .asset-head-copy,.asset-head-actions { position: relative; z-index: 3; }
 .asset-head-copy { min-width: 260px; }
 .asset-eyebrow { display: inline-flex; align-items: center; gap: 9px; color: #9a9a9a; font-size: 12px; font-weight: 850; letter-spacing: .12em; }
@@ -656,7 +774,7 @@ function typeLabel(type) {
 .asset-title-line h1 { margin: 0; color: #f4f4f4; font-size: clamp(26px,2.6vw,34px); font-weight: 850; line-height: 1.1; letter-spacing: -.04em; }
 .asset-title-line b { padding: 4px 9px; border: 1px solid #3a3a3a; border-radius: 999px; color: #9b9b9b; background: #202020; font-size: 12px; white-space: nowrap; }
 .asset-head-copy p { margin: 12px 0 0; color: #8b8b8b; font-size: 13px; }
-.asset-head-art { position: absolute; z-index: 1; top: 22px; left: 52%; width: 220px; height: 120px; opacity: .5; transform: translateX(-50%); pointer-events: none; }
+.asset-head-art { position: absolute; z-index: 1; top: 22px; left: 40%; width: 220px; height: 120px; opacity: .5; transform: translateX(-50%); pointer-events: none; }
 .asset-head-art > svg { position: absolute; inset: 0; width: 100%; height: 100%; fill: none; stroke: #3a6a8a; stroke-width: 1.4; }
 .asset-art-card { position: absolute; z-index: 2; display: block; border: 1px solid #404040; border-radius: 8px; background: #1d1d1d; box-shadow: 0 8px 18px #0006; }
 .asset-art-card i { display: block; width: 100%; height: 60%; border-radius: 4px; margin: 4px 4px 0; width: calc(100% - 8px); }
@@ -667,7 +785,7 @@ function typeLabel(type) {
 .asset-art-card-scene i { background: linear-gradient(135deg,#5e3a2a,#9e6a4a); }
 .asset-art-card-audio { bottom: 12px; left: 50%; width: 50px; height: 54px; border-color: #2e6a4e; transform: translateX(-50%) rotate(-1deg); }
 .asset-art-card-audio i { background: linear-gradient(135deg,#2a5e3e,#4a9e6a); }
-.asset-head-actions { display: flex; align-items: center; gap: 10px; padding: 7px; border: 1px solid #393939; border-radius: 14px; background: #222222e6; box-shadow: 0 12px 30px #0003; backdrop-filter: blur(12px); }
+.asset-head-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; padding: 7px; border: 1px solid #393939; border-radius: 14px; background: #222222e6; box-shadow: 0 12px 30px #0003; backdrop-filter: blur(12px); }
 .asset-search { display: flex; width: clamp(190px,18vw,260px); height: 38px; align-items: center; gap: 9px; padding: 0 13px; border: 1px solid #3a3a3a; border-radius: 20px; background: #1a1a1a; }
 input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
 .asset-search:focus-within { border-color: #5c5c5c; }
@@ -677,6 +795,8 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; a
 .asset-upload-button:hover,.asset-upload-button:focus-visible { border-color: #e8e8e8; outline: 0; background: #2b2b2b; box-shadow: 0 0 0 3px #ffffff12; }
 .asset-upload-button svg { width: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 .asset-library-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 20px 0 16px; }
+.asset-project-filter { width: clamp(132px,14vw,180px); flex: 0 1 auto; }
+.asset-project-filter :deep(.ui-select-trigger) { min-height: 38px; border-radius: 20px; background: #1a1a1a; }
 .asset-filter-tabs { display: flex; flex-wrap: wrap; gap: 7px; }
 .asset-filter-tabs button { height: 32px; padding: 0 13px; border: 1px solid #343434; border-radius: 9px; color: #898989; background: #1c1c1c; cursor: pointer; font-size: 12px; transition: .16s; }
 .asset-filter-tabs button:hover { border-color: #4a4a4a; color: #d0d0d0; background: #242424; }
@@ -690,8 +810,26 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; a
 .asset-filter-tabs button.asset-filter-storyboard i { background: #a78bfa; }
 .asset-filter-tabs button.active i { box-shadow: 0 0 0 3px rgba(255,255,255,.08); }
 .asset-toolbar-meta { color: #6a6a6a; font-size: 12px; white-space: nowrap; }
-.asset-toolbar-actions { display: flex; align-items: center; gap: 9px; }
+.asset-toolbar-side { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.asset-select-all { display: inline-flex; align-items: center; gap: 7px; color: #a8a8a8; font-size: 12px; cursor: pointer; user-select: none; }
+.asset-select-all input { appearance: none; -webkit-appearance: none; width: 16px; height: 16px; margin: 0; border: 1.5px solid #4a4a4a; border-radius: 4px; background: #1a1a1a; cursor: pointer; position: relative; transition: background-color .15s, border-color .15s; }
+.asset-select-all:hover input { border-color: #6a6a6a; }
+.asset-select-all input:checked { border-color: #60a5fa; background: #60a5fa; }
+.asset-select-all input:indeterminate { border-color: #60a5fa; background: #60a5fa; }
+.asset-select-all input:checked::after { content: ''; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid #10141c; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.asset-select-all input:indeterminate::after { content: ''; position: absolute; left: 3px; top: 6px; width: 8px; height: 2px; border-radius: 1px; background: #10141c; }
+.asset-batch-delete { display: inline-flex; min-height: 32px; align-items: center; gap: 7px; padding: 0 13px; border: 1px solid #ff5b7d44; border-radius: 9px; color: #ff8ba3; background: #ff3f6814; cursor: pointer; font-size: 12px; font-weight: 700; transition: .16s; }
+.asset-batch-delete:hover { border-color: #ff678566; color: #ffaebf; background: #ff3f6826; }
+.asset-batch-delete svg { width: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+.asset-select-box { position: absolute; z-index: 6; top: 9px; left: 9px; display: grid; width: 24px; height: 24px; place-items: center; border-radius: 7px; background: #101216d9; box-shadow: 0 4px 12px #0008; cursor: pointer; opacity: 0; transform: translateY(-4px); transition: .15s; backdrop-filter: blur(8px); }
+.asset-client-card:hover .asset-select-box,.asset-client-card:focus-within .asset-select-box,.asset-client-card.is-selected .asset-select-box { opacity: 1; transform: none; }
+.asset-select-box input { appearance: none; -webkit-appearance: none; width: 16px; height: 16px; margin: 0; border: 1.5px solid #ffffff52; border-radius: 4px; background: transparent; cursor: pointer; position: relative; transition: background-color .15s, border-color .15s; }
+.asset-select-box:hover input { border-color: #fff; }
+.asset-select-box input:checked { border-color: #60a5fa; background: #60a5fa; }
+.asset-select-box input:checked::after { content: ''; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid #10141c; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.asset-client-card.is-selected { border-color: rgba(var(--asset-rgb),.75); box-shadow: 0 0 0 1px rgba(var(--asset-rgb),.5),0 14px 36px #0006; }
 .asset-client-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 14px; }
+.asset-client-grid.is-refreshing { opacity: .55; pointer-events: none; transition: opacity .18s; }
 .asset-client-card { --asset-rgb: 96,165,250; position: relative; min-width: 0; overflow: hidden; border: 1px solid rgba(var(--asset-rgb),.18); border-radius: 14px; background: linear-gradient(160deg,#1e1e1e 0%,#161616 100%); transition: .22s cubic-bezier(.22,1,.36,1); }
 .asset-client-card[data-type=scene] { --asset-rgb:251,146,60; }.asset-client-card[data-type=audio] { --asset-rgb:52,211,153; }.asset-client-card[data-type=prop] { --asset-rgb:234,179,8; }
 .asset-client-card::after { position: absolute; inset: 0; border-radius: 14px; box-shadow: inset 0 1px 0 rgba(255,255,255,.04); pointer-events: none; content: ''; }
@@ -714,6 +852,17 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; a
 @media (max-width: 1280px) { .asset-client-grid { grid-template-columns: repeat(3,minmax(0,1fr)); } }
 @media (max-width: 900px) { .asset-client-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } .asset-head-art { display: none; } }
 @media (max-width: 560px) { .asset-client-grid { grid-template-columns: 1fr; } .asset-library-head { flex-direction: column; align-items: stretch; } .asset-head-actions { width: 100%; } .asset-search { flex: 1; width: auto; } }
+.asset-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; margin: 22px 0 4px; }
+.asset-pagination button { min-width: 34px; height: 34px; padding: 0 12px; border: 1px solid #343434; border-radius: 9px; color: #a8a8a8; background: #1c1c1c; cursor: pointer; font-size: 12px; transition: .16s; }
+.asset-pagination button:hover:not(:disabled) { border-color: #4a4a4a; color: #f0f0f0; background: #242424; }
+.asset-pagination button:disabled { opacity: .4; cursor: not-allowed; }
+.asset-pagination .asset-page-num { padding: 0; }
+.asset-pagination .asset-page-num.active { border-color: #515151; color: #f0f0f0; background: #2a2a2a; font-weight: 600; }
+.asset-page-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; }
+.asset-page-size { display: flex; align-items: center; gap: 8px; }
+.asset-page-size > span { color: #6a6a6a; font-size: 12px; white-space: nowrap; }
+.asset-page-size :deep(.ui-select) { width: 118px; }
+.asset-page-size :deep(.ui-select-trigger) { min-height: 34px; border-radius: 9px; background: #1c1c1c; }
 .asset-loading-card { min-height: 242px; pointer-events: none; animation: asset-skeleton-pulse 1.4s ease-in-out infinite; }
 .asset-loading-card:hover { border-color: rgba(var(--asset-rgb),.2); box-shadow: none; transform: none; }
 .asset-loading-cover { display: block; height: 168px; border-bottom: 1px solid #303030; background: linear-gradient(100deg,#232323 25%,#303030 50%,#232323 75%); background-size: 220% 100%; animation: asset-skeleton-shimmer 1.5s linear infinite; }
@@ -957,7 +1106,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; a
 @media (max-width:1450px) { .project-workspace-grid { grid-template-columns:repeat(4,minmax(0,1fr)); } }
 @media (max-width:1350px) { .asset-client-grid{grid-template-columns:repeat(3,minmax(0,1fr))} }
 @media (max-width:1180px) { .project-head-art{display:none}.project-workspace-grid{grid-template-columns:repeat(3,minmax(0,1fr))} }
-@media (max-width:900px) { .project-workspace-head{align-items:flex-start;flex-direction:column;gap:22px}.project-head-actions{width:100%}.project-search{width:auto;flex:1}.project-workspace-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.asset-library-toolbar{align-items:stretch;flex-direction:column}.asset-toolbar-actions{justify-content:flex-end}.asset-client-grid{grid-template-columns:repeat(2,minmax(0,1fr))} }
+@media (max-width:900px) { .project-workspace-head{align-items:flex-start;flex-direction:column;gap:22px}.project-head-actions{width:100%}.project-search{width:auto;flex:1}.project-workspace-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.asset-library-toolbar{align-items:stretch;flex-direction:column}.asset-client-grid{grid-template-columns:repeat(2,minmax(0,1fr))} }
 @media (max-width:1100px) { .library-grid:not(.library-grid-prompts),.library-grid-assets { grid-template-columns: repeat(3,minmax(0,1fr)); } }
 @container (max-width:540px) {
   .library-page-head { align-items: stretch; flex-direction: column; gap: 16px; }

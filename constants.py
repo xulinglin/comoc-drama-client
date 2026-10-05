@@ -25,15 +25,22 @@ BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", ROOT)).resolve()
 FRONTEND_DIST = BUNDLE_DIR / "frontend" / "dist" / "index.html"
 APP_ICON = ROOT / "assets" / "app-icon.ico"
 DATA_DIR = ROOT / "data"
-OUTPUT_DIR = ROOT / "output"
 if sys.platform == "darwin":
     APP_ICON = BUNDLE_DIR / "assets" / "app-icon.png"
     if getattr(sys, "frozen", False):
         # .app 内的资源不用于存储可写数据，也避免升级覆盖用户数据。
         user_root = Path.home() / "Library" / "Application Support" / "CDTV"
         DATA_DIR = user_root / "data"
-        OUTPUT_DIR = user_root / "output"
 STORAGE_DIR = DATA_DIR / "storage"
+# 视频输出并入项目存储目录下，用 output/ 子目录区分，不再单独配置。
+OUTPUT_DIR = STORAGE_DIR / "output"
+
+
+def output_dir_for(settings: dict) -> Path:
+    """按运行设置解析视频输出目录：项目存储目录下的 output/ 子目录。"""
+    storage_dir = settings.get("storageDir") if isinstance(settings, dict) else None
+    base = Path(str(storage_dir)).expanduser() if storage_dir else STORAGE_DIR
+    return (base / "output").resolve()
 ACCOUNTS_DIR = DATA_DIR / "accounts"
 ACCOUNTS_FILE = DATA_DIR / "accounts.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"

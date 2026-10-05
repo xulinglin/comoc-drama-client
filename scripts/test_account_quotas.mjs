@@ -43,7 +43,7 @@ test('Dola defaults to four and domestic remains three regardless of toolbar sel
   assert.equal(form.dailyVideoQuota(domestic), 3)
 })
 
-test('the original single-account control stays the same when selecting Dola', async () => {
+test('domestic quota updates preserve Dola quota regardless of the selected account', async () => {
   const { form, saves, cached } = setup()
   form.selectedAccountId.value = 'global'
   await form.updateDailyVideoQuota(3)
@@ -55,6 +55,15 @@ test('the original single-account control stays the same when selecting Dola', a
   assert.equal(saves[1].dolaDailyVideoQuota, 4)
   assert.equal(saves[1].dailyVideoQuota, 5)
   assert.deepEqual(cached, [['cdtv.dailyVideoQuota', '3'], ['cdtv.dailyVideoQuota', '5']])
+})
+
+test('Dola quota saves independently without overwriting the domestic cache', async () => {
+  const { form, saves, cached } = setup()
+  await form.updateDailyVideoQuota(7, 'dola')
+  assert.equal(saves[0].dolaDailyVideoQuota, 7)
+  assert.equal(saves[0].dailyVideoQuota, 3)
+  assert.equal(form.dailyVideoQuota(form.accounts.value[1]), 7)
+  assert.deepEqual(cached, [])
 })
 
 test('Dola exhaustion shows zero while the fourth generation remains available after three uses', () => {

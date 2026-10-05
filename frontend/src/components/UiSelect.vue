@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 const props = defineProps({
   modelValue: { type: [String, Number], default: '' },
@@ -8,12 +8,16 @@ const props = defineProps({
   badge: { type: String, default: '' },
   status: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
+  drop: { type: String, default: 'down' },
+  searchable: { type: Boolean, default: true },
 })
 
 const emit = defineEmits(['update:modelValue', 'change'])
 const root = ref(null)
+const searchInput = ref(null)
 const open = ref(false)
 const highlighted = ref(-1)
+const query = ref('')
 
 const normalizedOptions = computed(() => props.options.map(option => (
   typeof option === 'object'
@@ -21,10 +25,19 @@ const normalizedOptions = computed(() => props.options.map(option => (
     : { label: String(option), value: option }
 )))
 const selected = computed(() => normalizedOptions.value.find(option => option.value === props.modelValue))
+const filteredOptions = computed(() => {
+  const keyword = query.value.trim().toLowerCase()
+  if (!keyword) return normalizedOptions.value
+  return normalizedOptions.value.filter(option => String(option.label || '').toLowerCase().includes(keyword))
+})
 
 function setOpen(value) {
   if (props.disabled) return
   open.value = value
+  if (value) {
+    query.value = ''
+    if (props.searchable) nextTick(() => searchInput.value?.focus())
+  }
   highlighted.value = normalizedOptions.value.findIndex(option => option.value === props.modelValue)
 }
 
@@ -33,6 +46,10 @@ function choose(option) {
   emit('update:modelValue', option.value)
   emit('change', option.value)
   open.value = false
+}
+
+function handleSearchInput() {
+  highlighted.value = filteredOptions.value.findIndex(option => option.value === props.modelValue)
 }
 
 function handleKeydown(event) {
@@ -44,14 +61,14 @@ function handleKeydown(event) {
   if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault()
     if (!open.value) setOpen(true)
-    else if (normalizedOptions.value[highlighted.value]) choose(normalizedOptions.value[highlighted.value])
+    else if (filteredOptions.value[highlighted.value]) choose(filteredOptions.value[highlighted.value])
     return
   }
   if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return
   event.preventDefault()
   if (!open.value) setOpen(true)
   const direction = event.key === 'ArrowDown' ? 1 : -1
-  const total = normalizedOptions.value.length
+  const total = filteredOptions.value.length
   if (total) highlighted.value = (highlighted.value + direction + total) % total
 }
 
@@ -64,7 +81,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', closeFromOutsi
 </script>
 
 <template>
-  <div ref="root" class="ui-select" :class="{ open, disabled }">
+  <div ref="root" class="ui-select" :class="{ open, disabled, 'drop-up': drop === 'up' }">
     <button
       type="button"
       class="ui-select-trigger"
@@ -83,8 +100,22 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', closeFromOutsi
 
     <Transition name="select-popover">
       <div v-if="open" class="ui-select-menu" role="listbox">
+        <div v-if="searchable" class="ui-select-search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></svg>
+          <input
+            ref="searchInput"
+            v-model="query"
+            type="text"
+            class="ui-select-search-input"
+            placeholder="筛选选项"
+            aria-label="筛选选项"
+            autocomplete="off"
+            @input="handleSearchInput"
+            @keydown="handleKeydown"
+          />
+        </div>
         <button
-          v-for="(option, index) in normalizedOptions"
+          v-for="(option, index) in filteredOptions"
           :key="String(option.value)"
           type="button"
           class="ui-select-option"
@@ -98,7 +129,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', closeFromOutsi
           <span>{{ option.label }}</span>
           <svg v-if="option.value === modelValue" viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.2 2.7 2.7 6.3-6.1" /></svg>
         </button>
-        <div v-if="!normalizedOptions.length" class="ui-select-empty">暂无选项</div>
+        <div v-if="!filteredOptions.length" class="ui-select-empty">暂无选项</div>
       </div>
     </Transition>
   </div>
@@ -175,6 +206,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', closeFromOutsi
   right: 0;
   left: 0;
   box-sizing: border-box;
+  min-width: 240px;
   max-height: 232px;
   padding: 6px;
   overflow-y: auto;
@@ -184,9 +216,20 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', closeFromOutsi
   box-shadow: 0 22px 54px #000c,0 0 0 1px #0008,inset 0 1px 0 #ffffff0d;
   backdrop-filter: blur(18px);
 }
-.ui-select-menu::-webkit-scrollbar { width: 7px; }
+.ui-select-menu::-webkit-scrollbar { width: 10px; height: 10px; }
 .ui-select-menu::-webkit-scrollbar-track { background: transparent; }
-.ui-select-menu::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 99px; background: #555; background-clip: padding-box; }
+.ui-select-menu::-webkit-scrollbar-thumb {
+  min-height: 44px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: #414141;
+  background-clip: padding-box;
+}
+.ui-select-menu::-webkit-scrollbar-thumb:hover { border-width: 2px; background: #5a5a5a; background-clip: padding-box; }
+.ui-select-search { position: sticky; top: -6px; z-index: 2; display: flex; align-items: center; gap: 8px; margin: -6px -6px 4px; padding: 8px 10px; border-bottom: 1px solid #333; background: linear-gradient(180deg,#232323f7,#1d1d1dfa); backdrop-filter: blur(18px); }
+.ui-select-search svg { width: 15px; flex: 0 0 auto; fill: none; stroke: #7a7a7a; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ui-select-search-input { min-width: 0; flex: 1; border: 0; outline: 0; color: #ededed; background: transparent; font-size: 13px; }
+.ui-select-search-input::placeholder { color: #777; }
 .ui-select-option {
   display: flex;
   align-items: center;
@@ -213,4 +256,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', closeFromOutsi
 .ui-select-empty { padding: 18px 10px; color: #686868; font-size: 12px; text-align: center; }
 .select-popover-enter-active, .select-popover-leave-active { transition: opacity .16s ease,transform .16s ease; transform-origin: top center; }
 .select-popover-enter-from, .select-popover-leave-to { opacity: 0; transform: translateY(-5px) scale(.98); }
+.ui-select.drop-up .ui-select-menu { top: auto; bottom: calc(100% + 7px); }
+.ui-select.drop-up .select-popover-enter-active, .ui-select.drop-up .select-popover-leave-active { transform-origin: bottom center; }
+.ui-select.drop-up .select-popover-enter-from, .ui-select.drop-up .select-popover-leave-to { transform: translateY(5px) scale(.98); }
 </style>

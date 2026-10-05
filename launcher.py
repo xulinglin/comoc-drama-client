@@ -163,7 +163,6 @@ from constants import (
     GENERATION_TASKS_FILE,
     ORIGINAL_DOUBAO_URL,
     FRONTEND_DIST,
-    OUTPUT_DIR,
     ROOT,
     SETTINGS_FILE,
     STORAGE_API_BASE_URL,
@@ -1821,7 +1820,7 @@ class DesktopApi:
     def get_app_info(self) -> dict[str, Any]:
         profile_dir = DATA_DIR / "doubao_profile"
         profile_dir.mkdir(parents=True, exist_ok=True)
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        self._output_dir().mkdir(parents=True, exist_ok=True)
         return {
             "mode": "browser",
             "platform": sys.platform,
@@ -1829,7 +1828,7 @@ class DesktopApi:
             "storageBase": STORAGE_API_BASE_URL,
             "storageReady": self._storage_available(),
             "profileDir": str(profile_dir),
-            "outputDir": str(OUTPUT_DIR),
+            "outputDir": str(self._output_dir()),
         }
 
     def list_accounts(self, token: str = "") -> list[dict[str, Any]]:
@@ -2130,7 +2129,6 @@ class DesktopApi:
     def get_settings(self) -> dict[str, Any]:
         defaults = {
             "defaultAccountId": "",
-            "outputDir": str(OUTPUT_DIR.resolve()),
             "storageDir": str(STORAGE_DIR.resolve()),
             "autoDownload": True,
             "accountCloudMigrated": False,
@@ -2152,9 +2150,6 @@ class DesktopApi:
         current = self.get_settings()
         previous_storage_dir = Path(str(current["storageDir"])).expanduser().resolve()
         current["defaultAccountId"] = str(settings.get("defaultAccountId", ""))
-        output_dir = Path(str(settings.get("outputDir", current["outputDir"]))).expanduser().resolve()
-        output_dir.mkdir(parents=True, exist_ok=True)
-        current["outputDir"] = str(output_dir)
         storage_dir = Path(str(settings.get("storageDir", current["storageDir"]))).expanduser().resolve()
         storage_dir.mkdir(parents=True, exist_ok=True)
         current["storageDir"] = str(storage_dir)
@@ -2344,17 +2339,16 @@ class DesktopApi:
         generated = self._non_negative_int(account.get("generatedToday"), 0) if account.get("quotaUsageDate") == today else 0
         return bool(account.get("quotaExhaustedOn") == today or generated >= self._account_daily_quota(account))
 
-    def select_output_directory(self) -> str | None:
-        if self._window is None:
-            return None
-        result = self._window.create_file_dialog(webview.FileDialog.FOLDER)
-        return str(Path(result[0]).resolve()) if result else None
-
     def select_storage_directory(self) -> str | None:
         if self._window is None:
             return None
         result = self._window.create_file_dialog(webview.FileDialog.FOLDER)
         return str(Path(result[0]).resolve()) if result else None
+
+    def _output_dir(self) -> Path:
+        """视频输出目录固定为项目存储目录下的 output/ 子目录。"""
+        storage_dir = Path(str(self.get_settings()["storageDir"])).expanduser().resolve()
+        return storage_dir / "output"
 
     @staticmethod
     def _open_native_path(path: Path) -> None:
@@ -2364,7 +2358,7 @@ class DesktopApi:
             os.startfile(path)
 
     def open_output_directory(self) -> bool:
-        output_dir = Path(self.get_settings()["outputDir"]).resolve()
+        output_dir = self._output_dir()
         output_dir.mkdir(parents=True, exist_ok=True)
         self._open_native_path(output_dir)
         return True
@@ -2474,8 +2468,8 @@ class DesktopApi:
         if not isinstance(videos, list) or not videos:
             raise ValueError("当前项目没有可打包的成片")
 
-        # 1. 读取运行设置中的视频输出目录
-        output_dir = Path(self.get_settings()["outputDir"]).expanduser().resolve()
+        # 1. 读取视频输出目录（项目存储目录下的 output/）
+        output_dir = self._output_dir()
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # 2. 项目名做安全处理，去掉 Windows 不允许的字符

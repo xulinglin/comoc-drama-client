@@ -329,7 +329,7 @@ class MigrationTests(unittest.TestCase):
         old_root = self.server.storage.root
         api._local_storage_server = self.server
         api.get_settings = lambda: {"defaultAccountId": "", "storageDir": str(old_root),
-                                   "outputDir": str(self.root / "output"), "dailyVideoQuota": 3}
+                                   "dailyVideoQuota": 3}
         api._write_settings = Mock()
         api._push_cloud_account_state = Mock()
         self.assertFalse(api.save_settings({"storageDir": str(old_root)})["storageRestartRequired"])

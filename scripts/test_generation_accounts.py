@@ -166,7 +166,7 @@ class AccountTypeTests(unittest.TestCase):
 
     def test_settings_save_preserves_dola_quota_when_legacy_payload_omits_it(self):
         self.api.get_settings = DesktopApi.get_settings.__get__(self.api)
-        settings = self.api.save_settings({"storageDir": str(self.root / "storage"), "outputDir": str(self.root / "output"),
+        settings = self.api.save_settings({"storageDir": str(self.root / "storage"),
                                           "dailyVideoQuota": 3, "dolaDailyVideoQuota": 4})
         self.assertEqual(settings["dolaDailyVideoQuota"], 4)
         settings = self.api.save_settings({"dailyVideoQuota": 5})

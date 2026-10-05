@@ -41,7 +41,7 @@ Project data and uploaded files are stored locally by default:
 - **Built-in local storage service**: `local_storage.py` uses the standard-library `sqlite3` + `http.server` and serves data and file storage on `127.0.0.1:18081` at startup.
 - **Single local account**: the app uses a local user; no registration or login is needed.
 
-The default database is `data/storage/storage.db` (SQLite), and uploaded files live in `data/storage/files/`. A custom storage directory can be selected in settings; generated videos default to `output/`. To back up the workspace, close the client and copy the entire configured storage directory.
+The default database is `data/storage/storage.db` (SQLite), and uploaded files live in `data/storage/files/`. A custom storage directory can be selected in settings; generated videos go to the `output/` subfolder of that storage directory. To back up the workspace, close the client and copy the entire configured storage directory.
 
 > Current implementation: `/ai/image` supports OpenAI-compatible generation and reference-image editing; `/ai/audio` supports MiniMax voice design and preview audio; `/ai/video` supports Seedance submission, polling, and local result storage; `/ai/chat` forwards non-streaming Chat Completions and requests to a full `/messages` endpoint. These routes use the enabled model's API URL, key, and model name from settings. Generated media is saved locally. Image URLs can be a service root, a base ending in `/v1`, or a full `/images/generations` endpoint; use full audio and video endpoints as shown below. OriginalDoubao browser automation remains a separate path requiring internet access and a valid login. MiniMax voice previews do not provide full dialogue dubbing or lip synchronization.
 

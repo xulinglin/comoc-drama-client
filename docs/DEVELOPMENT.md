@@ -79,7 +79,7 @@ Mac 自动化优先查找对应芯片架构的内置 Chrome for Testing，随后
 
 Mac 使用原生窗口边框进行拖动和缩放；文件与目录使用 Finder 打开，复制素材使用系统文件剪贴板。浏览器能否接收多文件粘贴仍需实机确认。
 
-源码运行仍将数据存入项目的 `data/`、`output/`；打包 `.app` 后改为 `~/Library/Application Support/CDTV/data/` 和 `~/Library/Application Support/CDTV/output/`，避免向应用包内写数据。源码数据不会自动迁移到 `.app`：如需继续使用，关闭两端客户端后复制 `data/`，并在设置中心检查存储和输出目录。跨系统复制项目数据后需重新检查素材绝对路径；建议在 Mac 重新登录账号，不直接复用 Windows Chrome Profile。
+源码运行仍将数据存入项目的 `data/`，视频输出在其 `data/storage/output/`；打包 `.app` 后改为 `~/Library/Application Support/CDTV/data/`，视频输出在其 `data/storage/output/`，避免向应用包内写数据。源码数据不会自动迁移到 `.app`：如需继续使用，关闭两端客户端后复制 `data/`，并在设置中心检查项目存储目录。跨系统复制项目数据后需重新检查素材绝对路径；建议在 Mac 重新登录账号，不直接复用 Windows Chrome Profile。
 
 在 **Mac 本机**构建 `.app`：
 

@@ -105,5 +105,5 @@ comoc-drama-client/
 ├─ assets/                # App icons
 ├─ scripts/               # Utility scripts (icon generation, window debug, shortcut, etc.)
 ├─ docs/                  # Additional documentation
-└─ data/ output/          # Runtime data (gitignored)
+└─ data/                  # Runtime data (gitignored); video output in data/storage/output/
 ```

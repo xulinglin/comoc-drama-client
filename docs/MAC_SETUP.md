@@ -120,9 +120,9 @@ comoc-drama-client/
 
 ## 数据位置和常见问题
 
-源码运行时，数据仍放在项目下的 `data/`，生成文件默认放在 `output/`。打包 `.app` 后，默认分别放到 `~/Library/Application Support/CDTV/data/` 和 `~/Library/Application Support/CDTV/output/`。设置中心可以修改存储和输出目录。
+源码运行时，数据放在项目下的 `data/`，生成文件放在项目存储目录（`data/storage/`）下的 `output/`。打包 `.app` 后，数据放到 `~/Library/Application Support/CDTV/data/`，生成文件在其 `data/storage/output/` 下。设置中心可以修改项目存储目录，视频输出固定为该目录下的 `output/` 子目录。
 
-若需要迁移已有项目，先关闭两端客户端并保留原始备份，再复制项目数据；进入 Mac 客户端后检查存储目录、输出目录和素材路径，Windows 的绝对路径需要重新选择。源码的数据不会自动迁移到 `.app` 的新目录。
+若需要迁移已有项目，先关闭两端客户端并保留原始备份，再复制项目数据；进入 Mac 客户端后检查存储目录和素材路径，Windows 的绝对路径需要重新选择。源码的数据不会自动迁移到 `.app` 的新目录。
 
 | 提示或现象 | 处理方法 |
 | --- | --- |
