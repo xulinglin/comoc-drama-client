@@ -114,13 +114,15 @@ class MigrationTests(unittest.TestCase):
         api._storage_request = self.client.request
         with patch.multiple("launcher", DATA_DIR=self.root, ACCOUNTS_FILE=self.root / "accounts.json",
                             SETTINGS_FILE=self.root / "settings.json"):
-            api._write_accounts([{"id": "first", "name": "第一"}, {"id": "second", "name": "第二"}])
+            api._write_accounts([{"id": "first", "name": "第一"}, {"id": "second", "name": "第二", "accountType": "dola"}])
             (self.root / "accounts.json").unlink()
             self.assertEqual([item["id"] for item in api._read_accounts()], ["first", "second"])
-            api._write_accounts([{"id": "second", "name": "改名"}])
+            self.assertEqual([item["accountType"] for item in api._read_accounts()], ["doubao", "dola"])
+            api._write_accounts([{"id": "second", "name": "改名", "accountType": "dola"}])
             records = self.client.get("/api/storage/data/account").json()
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0]["data"]["name"], "改名")
+            self.assertEqual(records[0]["data"]["accountType"], "dola")
 
     def test_sqlite_connections_close_after_reads_and_writes(self):
         storage = self.server.storage
@@ -308,7 +310,7 @@ class MigrationTests(unittest.TestCase):
         api._ensure_worker = Mock(return_value=worker)
         file = self.root / "reference.png"
         file.write_bytes(self.provider.png)
-        with patch("launcher.DATA_DIR", self.root):
+        with patch("launcher.DATA_DIR", self.root), patch("launcher.GENERATION_TASKS_FILE", self.root / "generation_tasks.json"):
             result = api.start_generation({"attachments": [{"path": str(file), "type": "image"}],
                                            "prompt": "测试", "accountId": "a", "autoAssignAccount": False})
         self.assertEqual(api._tasks[result["taskId"]]["accountName"], "手动账号")

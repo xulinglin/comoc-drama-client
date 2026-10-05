@@ -886,6 +886,8 @@ textarea:focus { box-shadow: 0 0 0 3px #ffffff10; }
 .account-icon-action { width: 25px; height: 28px; border-radius: 7px; color: #929292; }
 .account-icon-action:focus-visible { outline: 2px solid #aaa; outline-offset: 1px; }
 .account-status-copy { min-height: 18px; color: #8b8b8b!important; font-size: 12px!important; }
+.account-type-badge { justify-self: start; padding: 2px 7px; border: 1px solid #444; border-radius: 5px; color: #bdbdbd; background: #292929; font-size: 10px; line-height: 16px; }
+.account-type-badge.dola { border-color: #3e625d; color: #8ed6c4; background: #21342f; }
 .account-row.authenticated .account-status-copy { color: #72cbb2!important; }
 .account-row.quota-exhausted .account-status-copy { color: #e47b86!important; }
 .account-quota-summary { display: grid; grid-template-columns: auto minmax(64px,1fr); align-items: end; gap: 8px; margin-top: 3px; padding-top: 8px; border-top: 1px solid #303030; }
@@ -900,7 +902,9 @@ textarea:focus { box-shadow: 0 0 0 3px #ffffff10; }
 .account-state-actions { margin-top: 4px; }
 .account-state-actions button { min-height: 28px; padding: 0 9px; border-color: #3d3d3d; border-radius: 7px; color: #aaa; background: #252525; font-size: 11px; transition: border-color .16s ease,color .16s ease,background-color .16s ease; }
 .account-footer-panel { margin-top: 16px; padding: 14px; border: 1px solid #333; border-radius: 16px; background: #1d1d1d; }
-.new-account { margin-top: 0; }
+.new-account { margin-top: 0; grid-template-columns: 140px minmax(0,1fr) auto; }
+.new-account select { height: 44px; min-width: 0; padding: 0 10px; border: 1px solid #3b3b3b; border-radius: 10px; color: #eee; background: #131313; font-size: 13px; }
+.new-account select:focus-visible { outline: 2px solid #777; outline-offset: 2px; }
 .new-account input { height: 44px; box-sizing: border-box; border-color: #3b3b3b; border-radius: 10px; background: #131313; }
 .new-account button { display: inline-flex; height: 44px; align-items: center; gap: 7px; padding: 0 17px; border: 1px solid #4a4a4a; border-radius: 10px; color: #f2f2f2; background: #303030; }
 .new-account button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }

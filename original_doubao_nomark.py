@@ -1,7 +1,4 @@
-"""OriginalDoubao no-watermark video parsing helpers.
-
-Only the OriginalDoubao video parser needed by this desktop application is included.
-"""
+"""Official OriginalDoubao and Dola no-watermark video parsing helpers."""
 
 from __future__ import annotations
 
@@ -13,6 +10,7 @@ import re
 import uuid
 from collections.abc import Iterable
 from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urlparse, urlunparse
+from urllib.request import getproxies
 
 import httpx
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -50,17 +48,43 @@ def is_douyin_media_url(url: str) -> bool:
 
 
 def is_supported_conversion_url(url: str) -> bool:
-    """Accept OriginalDoubao share pages and their Douyin CDN video URLs."""
+    """Accept Doubao/Dola share pages and their platform CDN video URLs."""
 
     parsed = urlparse(str(url).strip())
     hostname = (parsed.hostname or "").lower()
     return (
         parsed.scheme in {"http", "https"}
         and (
-            hostname in {"doubao.com", "www.doubao.com"}
+            hostname in {"doubao.com", "www.doubao.com", "dola.com", "www.dola.com"}
             or is_douyin_media_url(url)
+            or is_dola_media_url(url)
         )
     )
+
+
+def is_dola_media_url(url: str) -> bool:
+    parsed = urlparse(str(url).strip())
+    hostname = (parsed.hostname or "").lower()
+    return (
+        parsed.scheme in {"http", "https"}
+        and re.fullmatch(r"v\d+(?:-[a-z0-9-]+)?\.dola\.com", hostname) is not None
+        and "/video/tos/" in parsed.path.lower()
+    )
+
+
+def conversion_account_type(url: str) -> str:
+    if not is_supported_conversion_url(url):
+        return ""
+    hostname = (urlparse(str(url).strip()).hostname or "").lower()
+    return "dola" if hostname in {"dola.com", "www.dola.com"} or is_dola_media_url(url) else "doubao"
+
+
+def platform_media_proxy(referer: str) -> str | None:
+    """Follow the Windows system proxy for international media requests."""
+    if (urlparse(referer).hostname or "").lower() not in {"dola.com", "www.dola.com"}:
+        return None
+    proxies = getproxies()
+    return proxies.get("https") or proxies.get("http") or None
 
 
 def force_no_watermark_url(url: str) -> str:
@@ -105,7 +129,76 @@ def _clean_fplay_api_url(fallback_api: str) -> str:
     return urlunparse(parsed._replace(query=urlencode(params)))
 
 
-async def original_doubao_fplay_parse(fallback_api: str, video_id: str) -> list[dict[str, object]]:
+async def dola_video_parse(
+    video_ids: Iterable[str], cookies: dict[str, str], *, proxy: str | None = None,
+) -> list[dict[str, object]]:
+    """Use Dola's official AI-watermark setting and original-download endpoint."""
+    ids = list(dict.fromkeys(video_ids))
+    if not ids:
+        return []
+    jar = httpx.Cookies()
+    for name, value in cookies.items():
+        jar.set(name, value, domain=".dola.com", path="/")
+    params = {"aid": "495671", "real_aid": "495671", "device_platform": "web", "language": "en", "samantha_web": "1"}
+    headers = {"Origin": "https://www.dola.com", "Referer": "https://www.dola.com/chat", "User-Agent": "Mozilla/5.0"}
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True, cookies=jar, proxy=proxy) as client:
+        async def request(path: str, body: dict[str, object]) -> dict[str, object]:
+            response = await client.post("https://www.dola.com" + path, params=params, headers=headers, json=body)
+            response.raise_for_status()
+            payload = response.json()
+            code = int(payload.get("code") or 0)
+            if code == 710012001:
+                raise ValueError("Dola 账号登录已过期，请重新登录")
+            if code == 710022003:
+                raise ValueError("Dola 当前网络受地区限制，请检查账号浏览器使用的网络")
+            if code:
+                raise ValueError(str(payload.get("msg") or payload.get("message") or f"Dola 接口错误 {code}"))
+            data = payload.get("data")
+            return data if isinstance(data, dict) else {}
+
+        resource_path = "/creativity/resource/get_without_watermark"
+        data = await request(resource_path, {"vid": ids})
+        enabled_here = False
+        if data.get("without_watermark") is False:
+            config = await request("/creativity/user_config/get", {})
+            option = config.get("config_map", {}).get("1", {}).get("watermark_option", {})
+            if (option.get("subscribe_config") or {}).get("need_upgrade") is True:
+                raise ValueError("Dola 官方提示当前账号需升级才能使用去 AI 水印功能")
+            if option.get("is_on") is True:
+                raise ValueError("Dola 去 AI 水印开关已开启，但官方未提供该视频的无水印资源")
+            await request("/creativity/user_config/set", {"config_type": 1, "config_value": {"watermark_option": {"is_on": True}}})
+            enabled_here = True
+        try:
+            if enabled_here:
+                data = await request(resource_path, {"vid": ids})
+            if data.get("without_watermark") is not True:
+                raise ValueError("Dola 官方未提供该视频的无水印资源，请检查账号功能权限或视频状态")
+            videos = []
+            downloads = data.get("download_video") or {}
+            for video_id in ids:
+                item = downloads.get(video_id) if isinstance(downloads, dict) else None
+                if not isinstance(item, dict):
+                    continue
+                url = item.get("download_url")
+                if not isinstance(url, str) or urlparse(url).scheme not in {"http", "https"}:
+                    continue
+                videos.append({"video_id": video_id, "url": url, "duration": item.get("duration"), "source": "dola_official_without_watermark"})
+            if not videos:
+                raise ValueError("Dola 官方无水印接口未返回该视频的下载地址")
+            return videos
+        except Exception:
+            if enabled_here:
+                # Restore the user's previous setting if enabling did not yield a result.
+                try:
+                    await request("/creativity/user_config/set", {"config_type": 1, "config_value": {"watermark_option": {"is_on": False}}})
+                except Exception:
+                    pass
+            raise
+
+
+async def original_doubao_fplay_parse(
+    fallback_api: str, video_id: str, *, referer: str = "https://www.doubao.com/", proxy: str | None = None,
+) -> list[dict[str, object]]:
     """Resolve and decrypt an official OriginalDoubao fplay model URL."""
 
     clean_api = _clean_fplay_api_url(fallback_api)
@@ -113,10 +206,10 @@ async def original_doubao_fplay_parse(fallback_api: str, video_id: str) -> list[
         return []
     headers = {
         "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.doubao.com/",
+        "Referer": referer,
         "User-Agent": "Mozilla/5.0",
     }
-    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True, proxy=proxy) as client:
         response = await client.get(clean_api, headers=headers)
         response.raise_for_status()
         payload = response.json()

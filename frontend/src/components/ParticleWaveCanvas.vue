@@ -47,8 +47,10 @@ function paint(elapsed) {
   const inset = Math.min(width, height) * 0.065
   const stepX = (width - inset * 2) / Math.max(1, columns - 1)
   const stepY = (height - inset * 2) / Math.max(1, rows - 1)
-  const radius = Math.min(stepX, stepY) * 0.06
-  const center = 0.5 + Math.sin(elapsed * props.speed * Math.PI * 2) * 0.42
+  const radius = Math.min(stepX, stepY) * 0.075
+  const phase = elapsed * props.speed * Math.PI * 2
+  const center = 0.5 + Math.sin(phase) * 0.42
+  const trail = 0.5 + Math.sin(phase - 0.55) * 0.42
 
   for (let row = 0; row < rows; row += 1) {
     for (let column = 0; column < columns; column += 1) {
@@ -57,11 +59,12 @@ function paint(elapsed) {
       const v = rows === 1 ? 0.5 : row / (rows - 1)
       const diagonal = (u + v) / 2
       const wave = Math.exp(-Math.pow((diagonal - center) / 0.2, 2))
+      const echo = Math.exp(-Math.pow((diagonal - trail) / 0.26, 2)) * 0.6
       const edge = Math.sin(Math.PI * (0.08 + u * 0.84)) * Math.sin(Math.PI * (0.08 + v * 0.84))
-      const alpha = 0.025 + wave * edge * 0.42
+      const alpha = 0.012 + (wave + echo) * edge * 0.85
       ctx.beginPath()
       ctx.arc(inset + column * stepX, inset + row * stepY, radius, 0, Math.PI * 2)
-      ctx.fillStyle = `rgba(110, 110, 115, ${alpha.toFixed(3)})`
+      ctx.fillStyle = `rgba(228, 228, 233, ${Math.min(alpha, 0.92).toFixed(3)})`
       ctx.fill()
     }
   }

@@ -61,7 +61,31 @@
               <img v-if="message.reference" class="image-chat-reference" :src="message.reference" alt="参考图" />
               <p v-if="message.text" class="image-chat-text">{{ message.text }}</p>
               <div v-if="message.images.length" class="image-chat-result-grid">
-                <img v-for="(url, index) in message.images" :key="index" class="image-chat-result" :src="url" alt="生成结果" @click="previewImage = url" />
+                <figure v-for="(url, index) in message.images" :key="index" class="image-chat-result-card">
+                  <img class="image-chat-result" :src="url" alt="生成结果" @click="previewImage = url" />
+                  <figcaption class="image-chat-result-tools">
+                    <button class="image-chat-tool" type="button" title="下载到本地" @click="saveImage(url)">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10m0 0-4-4m4 4 4-4M5 18h14"/></svg>
+                      下载
+                    </button>
+                    <button class="image-chat-tool" type="button" title="作为参考图" @click="useAsReference(url)">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg>
+                      参考图
+                    </button>
+                    <button
+                      class="image-chat-tool"
+                      type="button"
+                      :disabled="assetSaving[url] === 'saving' || assetSaving[url] === 'saved'"
+                      title="保存到素材库"
+                      @click="saveToLibrary(url)"
+                    >
+                      <span v-if="assetSaving[url] === 'saving'" class="spinner"></span>
+                      <svg v-else-if="assetSaving[url] === 'saved'" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4 4L19 7"/></svg>
+                      <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h9L20 9.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5Z"/><path d="M14 4v5h5M12 11v6m0 0-3-3m3 3 3-3"/></svg>
+                      {{ assetSaving[url] === 'saving' ? '保存中' : assetSaving[url] === 'saved' ? '已入库' : '素材库' }}
+                    </button>
+                  </figcaption>
+                </figure>
               </div>
               <div v-if="message.generating" class="image-chat-generating" role="status" aria-label="正在生成图片" aria-busy="true">
                 <div class="image-chat-generating-placeholder" aria-hidden="true">
@@ -69,10 +93,7 @@
                 </div>
               </div>
               <p v-if="message.error" class="image-chat-error">{{ message.error }}</p>
-              <div v-if="!message.generating && message.images.length" class="image-chat-actions">
-                <button class="text-button" type="button" @click="saveImage(message.images[0])">保存到本地</button>
-                <button class="text-button" type="button" @click="useAsReference(message.images[0])">作为参考图</button>
-              </div>
+              <p v-if="message.assetNotice" class="image-chat-asset-notice" :class="message.assetNotice.type">{{ message.assetNotice.text }}</p>
             </div>
           </div>
         </div>
@@ -128,7 +149,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue'
 import UiSelect from './UiSelect.vue'
 import ParticleWaveCanvas from './ParticleWaveCanvas.vue'
 
@@ -152,6 +173,7 @@ const scrollArea = ref(null)
 const conversations = ref([])
 const activeConversationId = ref('')
 const conversationsLoading = ref(false)
+const assetSaving = ref({})
 const MAX_MESSAGES_PER_CONVERSATION = 50
 let persistTimer = null
 const suggestions = [
@@ -314,6 +336,36 @@ async function saveImage(url) {
   }
 }
 
+async function saveToLibrary(url) {
+  if (!window.pywebview?.api) {
+    setAssetNotice(url, 'error', '请从桌面客户端启动后再保存到素材库')
+    return
+  }
+  assetSaving.value = { ...assetSaving.value, [url]: 'saving' }
+  try {
+    const saved = await window.pywebview.api.save_image_data_url(url, 'generated.png')
+    const path = String(saved?.path || '').trim()
+    if (!path) throw new Error('图片保存失败')
+    const uploaded = await window.pywebview.api.upload_local_reference_file(props.token, path, {
+      imageName: `图片生成-${Date.now().toString(36)}`,
+      description: '来自图片生成',
+      tags: 'image-generation',
+      boundProjectIds: [],
+    })
+    if (!uploaded || (!uploaded.id && !uploaded.coverId)) throw new Error('素材入库失败')
+    assetSaving.value = { ...assetSaving.value, [url]: 'saved' }
+    setAssetNotice(url, 'success', '已保存到素材库')
+  } catch (error) {
+    assetSaving.value = { ...assetSaving.value, [url]: '' }
+    setAssetNotice(url, 'error', `保存到素材库失败：${cleanError(error)}`)
+  }
+}
+
+function setAssetNotice(url, type, text) {
+  const message = messages.value.find(item => Array.isArray(item.images) && item.images.includes(url))
+  if (message) message.assetNotice = { type, text }
+}
+
 function clearConversation() {
   messages.value = []
   pendingReference.value = null
@@ -469,6 +521,14 @@ async function ensureActiveConversation() {
 }
 
 watch(messages, () => { scrollToEnd(); schedulePersist() }, { deep: true })
+
+function flushPersist() {
+  if (!persistTimer) return
+  clearTimeout(persistTimer)
+  persistTimer = null
+  persistConversation()
+}
+
 onMounted(async () => {
   loadModels()
   await loadConversations()
@@ -476,6 +536,9 @@ onMounted(async () => {
     await openConversation(conversations.value[0].id)
   }
 })
+onActivated(() => { scrollToEnd() })
+onDeactivated(() => { flushPersist() })
+onBeforeUnmount(() => { flushPersist() })
 </script>
 
 <style scoped>
@@ -536,14 +599,22 @@ onMounted(async () => {
 .image-chat-bubble.is-generating { padding: 0; border: 0; border-radius: 0; background: transparent; }
 .image-chat-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .image-chat-reference { display: block; width: min(200px, 100%); border-radius: 10px; }
-.image-chat-result-grid { display: flex; flex-wrap: wrap; gap: 10px; }
-.image-chat-result { display: block; width: min(320px, 100%); max-height: 400px; object-fit: contain; border-radius: 10px; cursor: zoom-in; }
+.image-chat-result-grid { display: flex; flex-wrap: wrap; gap: 12px; }
+.image-chat-result-card { position: relative; display: block; margin: 0; overflow: hidden; border: 1px solid #ffffff14; border-radius: 14px; background: #17171b; box-shadow: 0 10px 30px #0004, inset 0 1px 0 #ffffff08; transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease; }
+.image-chat-result-card:hover { border-color: #ffffff2e; box-shadow: 0 14px 38px #0006, inset 0 1px 0 #ffffff0f; transform: translateY(-2px); }
+.image-chat-result { display: block; width: min(320px, 100%); max-height: 400px; object-fit: contain; cursor: zoom-in; }
+.image-chat-result-tools { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-top: 1px solid #ffffff0f; background: linear-gradient(180deg, #1f1f24, #1a1a1e); }
+.image-chat-tool { display: inline-flex; align-items: center; gap: 6px; flex: 1; justify-content: center; padding: 7px 8px; border: 1px solid #ffffff12; border-radius: 9px; color: #c2c2cc; background: #ffffff05; font-size: 12px; cursor: pointer; white-space: nowrap; transition: border-color .15s, color .15s, background .15s; }
+.image-chat-tool svg { width: 14px; height: 14px; flex: 0 0 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.image-chat-tool:hover:not(:disabled) { border-color: #ffffff2e; color: #fff; background: #ffffff12; }
+.image-chat-tool:disabled { cursor: default; opacity: .7; }
+.image-chat-tool .spinner { width: 13px; height: 13px; flex: 0 0 13px; border-width: 2px; }
 .image-chat-generating { width: 180px; max-width: 100%; }
-.image-chat-generating-placeholder { position: relative; width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: 17px; background: #f4f4f4; }
+.image-chat-generating-placeholder { position: relative; width: 100%; aspect-ratio: 1; overflow: hidden; border: 1px solid #ffffff10; border-radius: 17px; background: linear-gradient(180deg, #232329, #1c1c21); }
 .image-chat-error { margin: 0; color: #ff9999; overflow-wrap: anywhere; }
-.image-chat-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 2px; }
-.image-chat-actions .text-button { padding: 6px 10px; border: 1px solid #ffffff12; border-radius: 7px; color: #bdbdc7; font-size: 12px; }
-.image-chat-actions .text-button:hover { color: #fff; background: #ffffff08; }
+.image-chat-asset-notice { margin: 0; font-size: 12px; line-height: 1.6; }
+.image-chat-asset-notice.success { color: #8fd6a6; }
+.image-chat-asset-notice.error { color: #ff9999; }
 .image-chat-composer-area { flex-shrink: 0; padding: 14px 24px 16px; background: linear-gradient(0deg, #141416 78%, transparent); border-radius: 0 0 22px 22px; }
 .image-chat-composer { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 16px 16px 12px; border: 1px solid #3b3b44; border-radius: 20px; background: linear-gradient(180deg, #232329, #1c1c21); box-shadow: 0 10px 34px #0004, inset 0 1px 0 #ffffff0a; transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease; }
 .image-chat-composer:focus-within { border-color: #5c5c6b; box-shadow: 0 14px 40px #0005, 0 0 0 3px #ffffff07, inset 0 1px 0 #ffffff10; }

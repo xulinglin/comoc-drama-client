@@ -8,6 +8,7 @@ import json
 import mimetypes
 import os
 import queue
+import random
 import re
 import shutil
 import sqlite3
@@ -169,7 +170,9 @@ from constants import (
     STORAGE_SERVICE_JAR,
 )
 from original_doubao_worker import AccountBrowserWorker, OriginalDoubaoImageWorker
-from original_doubao_nomark import is_supported_conversion_url
+from generation_accounts import account_platform, normalize_account_type
+from dola_login import DolaLoginBrowser, launch_dola_login
+from original_doubao_nomark import is_supported_conversion_url, conversion_account_type
 from media_server import MediaPreviewServer
 
 # 项目文件目录树默认隐藏的构建 / 依赖 / 版本管理目录：
@@ -214,6 +217,8 @@ class DesktopApi:
         # 前端据此恢复进度并回显结果。加载逻辑见 _load_generation_tasks。
         self._load_generation_tasks()
         self._workers: dict[str, Any] = {}
+        self._login_browsers: dict[str, DolaLoginBrowser | None] = {}
+        self._finishing_logins: set[str] = set()
         self._account_usage: dict[str, dict[str, Any]] = {}
         # 校验登录得到的"会话已过期"标记。会随账号数据持久化到 loginExpiredAt 字段，
         # 客户端重启后由 _restore_login_expired_flags 还原，避免过期账号被误用。
@@ -1397,6 +1402,7 @@ class DesktopApi:
         return _stringify_id_fields(tasks)
 
     def start_generation(self, payload: dict[str, Any]) -> dict[str, str]:
+        attachments: list[dict[str, Any]] = []
         raw_attachments = payload.get("attachments")
         if isinstance(raw_attachments, list):
             for item in raw_attachments:
@@ -1424,6 +1430,8 @@ class DesktopApi:
         prompt = str(payload.get("prompt", "")).strip()
         preferred_account_id = str(payload.get("accountId") or self.get_settings()["defaultAccountId"])
         auto_assign_account = bool(payload.get("autoAssignAccount", True))
+        raw_account_type = str(payload.get("accountType") or "").strip().lower()
+        requested_account_type = "auto" if raw_account_type == "auto" else (normalize_account_type(raw_account_type) if raw_account_type else "")
 
         missing_attachment = next((item for item in attachments if not item["path"].is_file()), None)
         if missing_attachment is not None:
@@ -1435,9 +1443,13 @@ class DesktopApi:
         if not prompt:
             raise ValueError("请输入视频描述")
         if not auto_assign_account:
+            if requested_account_type == "auto":
+                raise ValueError("Do 自动模式需要开启自动分配账号")
             if not preferred_account_id:
                 raise ValueError("请先在设置中选择生成账号")
             account = self._find_account(preferred_account_id)
+            if requested_account_type and normalize_account_type(account.get("accountType")) != requested_account_type:
+                raise ValueError("所选账号与生成平台不一致，请选择对应平台的账号")
             if str(account.get("quotaExhaustedOn") or "") == date.today().isoformat():
                 raise ValueError("该生成账号今日视频额度已用完，请切换其他账号或明日再试")
             if getattr(self, "_login_expired", {}).get(str(preferred_account_id)):
@@ -1459,7 +1471,7 @@ class DesktopApi:
         audio_paths = [Path(item["path"]) for item in staged_attachments if item["type"] == "audio"]
         try:
             if auto_assign_account:
-                account = self._acquire_available_generation_account(preferred_account_id, task_id)
+                account = self._acquire_available_generation_account(preferred_account_id, task_id, requested_account_type)
                 account_id = str(account.get("id") or "")
             else:
                 account_id = preferred_account_id
@@ -1483,6 +1495,7 @@ class DesktopApi:
                 "model": payload.get("model", "Seedance 2.0 Fast"),
                 "accountId": account_id,
                 "accountName": str(account.get("name") or account_id),
+                "accountType": normalize_account_type(account.get("accountType")),
                 "demo": False,
                 "requiresManualVerification": False,
                 "resultWatermarked": False,
@@ -1502,7 +1515,8 @@ class DesktopApi:
         desired_visible = True
         with self._lock:
             worker = self._workers.get(account_id)
-        if worker is not None and worker.visible != desired_visible:
+        if worker is not None and (worker.visible != desired_visible or not callable(getattr(worker, "submit_generation", None))):
+            self._retire_worker(account_id, worker)
             worker.stop()
             worker.thread.join(timeout=8)
             worker = None
@@ -1628,14 +1642,15 @@ class DesktopApi:
                 "progress": 4,
                 "imageNames": [Path(item["path"]).name for item in attachments],
                 "prompt": prompt,
-                "model": str(payload.get("model") or "豆包图片生成"),
+                "model": str(payload.get("model") or f'{account_platform(account)["label"]}图片生成'),
                 "createdAt": time.time(),
                 "ownerType": str(payload.get("ownerType") or ""),
                 "ownerId": str(payload.get("ownerId") or ""),
                 "projectId": str(payload.get("projectId") or ""),
-                "taskName": str(payload.get("taskName") or "豆包图片"),
+                "taskName": str(payload.get("taskName") or f'{account_platform(account)["label"]}图片'),
                 "accountId": account_id,
                 "accountName": str(account.get("name") or account_id),
+                "accountType": normalize_account_type(account.get("accountType")),
                 "demo": False,
                 "requiresManualVerification": False,
                 "resultWatermarked": False,
@@ -1648,7 +1663,8 @@ class DesktopApi:
         desired_visible = True
         with self._lock:
             worker = self._workers.get(account_id)
-        if worker is not None and worker.visible != desired_visible:
+        if worker is not None and (worker.visible != desired_visible or not callable(getattr(worker, "submit_image_generation", None))):
+            self._retire_worker(account_id, worker)
             worker.stop()
             worker.thread.join(timeout=8)
             worker = None
@@ -1750,10 +1766,14 @@ class DesktopApi:
         if not clean_link:
             raise ValueError("请粘贴视频分享链接")
         if not is_supported_conversion_url(clean_link):
-            raise ValueError("请输入官方视频分享链接或抖音视频直链")
+            raise ValueError("请输入 Doubao / Dola 官方视频分享链接或视频直链")
         if not selected_account_id:
             raise ValueError("请先选择生成账号")
-        self._find_account(selected_account_id)
+        account = self._find_account(selected_account_id)
+        required_type = conversion_account_type(clean_link)
+        if normalize_account_type(account.get("accountType")) != required_type:
+            platform_label = account_platform({"accountType": required_type})["label"]
+            raise ValueError(f"此链接需要 {platform_label} 账号，请选择对应类型的生成账号")
         if getattr(self, "_login_expired", {}).get(selected_account_id):
             raise ValueError("该生成账号登录已过期，请重新登录后再试")
         usage_id = f"conversion-{uuid.uuid4().hex[:10]}"
@@ -1763,7 +1783,8 @@ class DesktopApi:
             desired_visible = True
             with self._lock:
                 worker = self._workers.get(selected_account_id)
-            if worker is not None and worker.visible != desired_visible:
+            if worker is not None and (worker.visible != desired_visible or not callable(getattr(worker, "submit_link_conversion", None))):
+                self._retire_worker(selected_account_id, worker)
                 worker.stop()
                 worker.thread.join(timeout=8)
                 worker = None
@@ -1806,6 +1827,8 @@ class DesktopApi:
             workers = dict(self._workers)
             usage = {key: dict(value) for key, value in self._account_usage.items()}
             login_expired = dict(self._login_expired)
+            manual_logins = set(getattr(self, "_login_browsers", {}))
+            finishing_logins = set(getattr(self, "_finishing_logins", set()))
         result = []
         login_history_changed = False
         today = date.today().isoformat()
@@ -1823,6 +1846,11 @@ class DesktopApi:
             if authenticated is None:
                 authenticated = self._has_saved_original_doubao_session(account_id)
             account["authenticated"] = bool(authenticated)
+            account["manualLoginPending"] = account_id in manual_logins
+            account["loginCompleting"] = account_id in finishing_logins
+            if account["manualLoginPending"]:
+                authenticated = False
+                account["authenticated"] = False
             account["loginExpired"] = bool(login_expired.get(account_id))
             account["dailyQuota"] = daily_quota
             account["generatedToday"] = min(generated_today, daily_quota)
@@ -1841,7 +1869,11 @@ class DesktopApi:
                     stored_account["hasLoggedIn"] = True
                     login_history_changed = True
                 account["hasLoggedIn"] = True
-            if account["inUse"]:
+            if account["loginCompleting"]:
+                account["status"] = "正在确认 Dola 登录…"
+            elif account["manualLoginPending"]:
+                account["status"] = "Dola 登录待确认 · 请点击完成登录"
+            elif account["inUse"]:
                 account["status"] = "运行中 · 账号已锁定"
             elif account["quotaExhaustedToday"]:
                 account["status"] = "今日额度已用完 · 明日自动恢复"
@@ -1885,6 +1917,7 @@ class DesktopApi:
         return {"accountIds": ordered_ids, "cloudSynced": cloud_synced}
 
     def _has_saved_original_doubao_session(self, account_id: str) -> bool:
+        domain = account_platform(self._find_account(account_id))["domain"]
         cookie_db = ACCOUNTS_DIR / account_id / "profile" / "Default" / "Network" / "Cookies"
         if not cookie_db.is_file():
             return False
@@ -1912,13 +1945,13 @@ class DesktopApi:
                 row = connection.execute(
                     """
                     SELECT 1 FROM cookies
-                    WHERE host_key LIKE '%doubao.com%'
+                    WHERE (host_key = ? OR host_key LIKE ?)
                       AND name IN ('sessionid', 'sessionid_ss')
                       AND (length(value) > 0 OR length(encrypted_value) > 0)
                       AND (expires_utc = 0 OR expires_utc > ?)
                     LIMIT 1
                     """,
-                    (now_chrome,),
+                    (domain, "%." + domain, now_chrome),
                 ).fetchone()
                 result = row is not None
             finally:
@@ -2011,6 +2044,9 @@ class DesktopApi:
         返回 None 表示 HTTP 校验不可用（无缓存 cookie / 网络错 / 无法判定）；
         返回 dict 表示判定完成，调用方据 loggedIn 字段决定是否还要 fallback 浏览器。
         """
+        # Dola 的 SSR 登录标记尚未确认，使用其页面校验，避免向豆包发送国际版凭证。
+        if normalize_account_type(self._find_account(account_id).get("accountType")) == "dola":
+            return None
         cookies = self._load_account_cookies_cache(account_id)
         if not cookies:
             # 无缓存：worker 从未启动过，fallback 浏览器首次写入缓存
@@ -2085,6 +2121,7 @@ class DesktopApi:
             "accountCloudMigrated": False,
             "accountLocalMigrated": False,
             "dailyVideoQuota": 3,
+            "dolaDailyVideoQuota": 4,
         }
         if not SETTINGS_FILE.exists():
             return defaults
@@ -2110,6 +2147,10 @@ class DesktopApi:
         current["dailyVideoQuota"] = max(
             1,
             min(self._non_negative_int(settings.get("dailyVideoQuota"), current.get("dailyVideoQuota", 3)), 99),
+        )
+        current["dolaDailyVideoQuota"] = max(
+            1,
+            min(self._non_negative_int(settings.get("dolaDailyVideoQuota"), current.get("dolaDailyVideoQuota", 4)), 99),
         )
         current["accountCloudMigrated"] = bool(
             settings.get("accountCloudMigrated", current.get("accountCloudMigrated", False))
@@ -2232,12 +2273,15 @@ class DesktopApi:
         account = next((item for item in accounts if item.get("id") == clean_account_id), None)
         if account is None:
             raise ValueError("账号不存在，请刷新账号列表")
-        limit = max(1, min(self._non_negative_int(daily_quota, 3), 99))
+        account_type = normalize_account_type(account.get("accountType"))
+        limit = max(1, min(self._non_negative_int(daily_quota, 4 if account_type == "dola" else 3), 99))
         today = date.today().isoformat()
         settings = self.get_settings()
-        settings["dailyVideoQuota"] = limit
+        settings["dolaDailyVideoQuota" if account_type == "dola" else "dailyVideoQuota"] = limit
         self._write_settings(settings)
         for item in accounts:
+            if normalize_account_type(item.get("accountType")) != account_type:
+                continue
             generated = (
                 min(self._non_negative_int(item.get("generatedToday"), 0), limit)
                 if str(item.get("quotaUsageDate") or "") == today
@@ -2584,7 +2628,12 @@ class DesktopApi:
                 except OSError:
                     pass
 
-    def create_account(self, name: str, token: str = "") -> dict[str, Any]:
+    def create_generation_account(self, name: str, account_type: str = "doubao", token: str = "") -> dict[str, Any]:
+        """显式类型接口；前端通过其存在性识别尚未重启的旧版后台。"""
+        return self.create_account(name, token, account_type)
+
+    def create_account(self, name: str, token: str = "", account_type: str = "doubao") -> dict[str, Any]:
+        clean_type = normalize_account_type(account_type)
         self._ensure_cloud_accounts_synced(token)
         clean_name = str(name).strip()
         if not clean_name:
@@ -2593,10 +2642,11 @@ class DesktopApi:
         account = {
             "id": uuid.uuid4().hex[:10],
             "name": clean_name[:30],
+            "accountType": clean_type,
             "sortOrder": len(accounts),
             "hasLoggedIn": False,
             "quotaExhaustedOn": "",
-            "dailyQuota": self.get_settings().get("dailyVideoQuota", 3),
+            "dailyQuota": self._account_daily_quota({"accountType": clean_type}),
             "quotaUsageDate": "",
             "generatedToday": 0,
             "status": "未登录或待确认",
@@ -2632,6 +2682,8 @@ class DesktopApi:
             raise ValueError("账号正在运行中，请等待任务结束或先手动释放")
 
         with self._lock:
+            if clean_account_id in getattr(self, "_login_browsers", {}):
+                raise ValueError("请先完成 Dola 登录后再删除账号")
             worker = self._workers.get(clean_account_id)
         if worker is not None:
             worker.stop()
@@ -2703,6 +2755,9 @@ class DesktopApi:
 
     def open_account_login(self, account_id: str) -> dict[str, str]:
         account = self._find_account(account_id)
+        if normalize_account_type(account.get("accountType")) == "dola":
+            return self._open_dola_login(account_id)
+        platform_label = account_platform(account)["label"]
         if self._account_is_in_use(account_id):
             raise ValueError("账号正在运行中，请等待任务结束或先手动释放")
         with self._lock:
@@ -2723,9 +2778,75 @@ class DesktopApi:
             args=(worker,),
             daemon=True,
         ).start()
-        return {"status": "opening", "message": f'正在打开 {account["name"]} 的 OriginalDoubao 登录窗口'}
+        return {"status": "opening", "message": f'正在打开 {account["name"]} 的 {platform_label} 登录窗口'}
+
+    def _open_dola_login(self, account_id: str) -> dict[str, str]:
+        account = self._find_account(account_id)
+        accounts_root = ACCOUNTS_DIR.resolve()
+        account_dir = (accounts_root / account_id).resolve()
+        if account_dir.parent != accounts_root:
+            raise ValueError("账号目录无效")
+        with self._lock:
+            if account_id in self._account_usage:
+                raise ValueError("账号正在运行中，请等待任务结束或先手动释放")
+            if account_id in self._login_browsers:
+                return {"status": "manual", "message": "请在 Dola 窗口中登录，然后回到软件点击“完成登录”"}
+            self._login_browsers[account_id] = None
+            current = self._workers.get(account_id)
+        try:
+            if current is not None:
+                current.stop()
+                current.thread.join(timeout=15)
+                if current.thread.is_alive():
+                    raise RuntimeError("账号浏览器正在关闭，请稍后重试")
+            browser = launch_dola_login(account_dir / "profile", account_platform(account)["url"])
+            with self._lock:
+                self._login_browsers[account_id] = browser
+        except Exception:
+            with self._lock:
+                self._login_browsers.pop(account_id, None)
+            raise
+        return {"status": "manual", "message": "已打开 Dola 登录窗口，登录后回到软件点击“完成登录”"}
+
+    def complete_account_login(self, account_id: str, token: str = "") -> dict[str, Any]:
+        account = self._find_account(account_id)
+        if normalize_account_type(account.get("accountType")) != "dola":
+            raise ValueError("此登录方式仅适用于 Dola 账号")
+        with self._lock:
+            browser = self._login_browsers.get(account_id)
+            if browser is None:
+                raise ValueError("请先打开 Dola 登录窗口，等待窗口启动后再完成登录")
+            if account_id in self._finishing_logins:
+                raise ValueError("正在确认登录，请稍候")
+            self._finishing_logins.add(account_id)
+        closed = False
+        try:
+            browser.close()
+            closed = True
+            self._session_probe_cache.pop(account_id, None)
+            self._account_cookie_cache_path(account_id).unlink(missing_ok=True)
+            result = self._check_account_login(account_id, token, completing_login=True)
+            if result["loggedIn"]:
+                accounts = self._read_accounts()
+                for item in accounts:
+                    if item["id"] == account_id:
+                        item["hasLoggedIn"] = True
+                self._write_accounts(accounts)
+                self._push_cloud_account_state(token)
+                result["message"] = "Dola 登录成功，登录状态已保存"
+            else:
+                result["message"] = "未检测到有效的 Dola 登录，请重新打开登录窗口完成登录"
+            return result
+        finally:
+            with self._lock:
+                self._finishing_logins.discard(account_id)
+                if closed:
+                    self._login_browsers.pop(account_id, None)
 
     def check_account_login(self, account_id: str, token: str = "") -> dict[str, Any]:
+        return self._check_account_login(account_id, token)
+
+    def _check_account_login(self, account_id: str, token: str = "", *, completing_login: bool = False) -> dict[str, Any]:
         """校验账号是否仍处于登录状态。
 
         优先走 HTTP 探活（不开浏览器，带真实 UA + Referer + 缓存 cookie）；
@@ -2735,13 +2856,17 @@ class DesktopApi:
         """
         self._ensure_cloud_accounts_synced(token)
         account = self._find_account(account_id)
+        with self._lock:
+            if not completing_login and account_id in getattr(self, "_login_browsers", {}):
+                raise ValueError("请先在 Dola 窗口中登录，再点击“完成登录”")
         if self._account_is_in_use(account_id):
             raise ValueError("账号正在运行中，请等待任务结束或先手动释放")
         account_name = str(account.get("name") or "该账号")
+        platform_label = account_platform(account)["label"]
         has_logged_in = bool(account.get("hasLoggedIn"))
 
         # 步骤 1：HTTP 探活。返回 None 表示无法判定，需要 fallback 浏览器。
-        http_result = self._http_check_login(account_id)
+        http_result = None if completing_login else self._http_check_login(account_id)
         if http_result is not None:
             logged_in = bool(http_result.get("loggedIn"))
             if logged_in or not has_logged_in:
@@ -2751,7 +2876,7 @@ class DesktopApi:
             if logged_in:
                 message = f"{account_name} 登录状态正常（HTTP 校验）"
             elif has_logged_in:
-                message = f"{account_name} 登录已过期，请打开 OriginalDoubao 重新登录"
+                message = f"{account_name} 登录已过期，请打开 {platform_label} 重新登录"
             else:
                 message = f"{account_name} 尚未登录"
             return {
@@ -2772,9 +2897,9 @@ class DesktopApi:
         worker = existing or self._ensure_worker(account_id, visible=False)
         try:
             if not worker.ready.wait(timeout=40):
-                raise RuntimeError(worker.start_error or "启动 OriginalDoubao 浏览器超时")
+                raise RuntimeError(worker.start_error or f"启动 {platform_label} 浏览器超时")
             if worker.start_error:
-                raise RuntimeError(f"启动 OriginalDoubao 浏览器失败：{worker.start_error}")
+                raise RuntimeError(f"启动 {platform_label} 浏览器失败：{worker.start_error}")
             reply: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
             worker.submit_check_login(reply)
             try:
@@ -2785,6 +2910,8 @@ class DesktopApi:
             if temporary:
                 worker.stop()
                 worker.thread.join(timeout=15)
+                if worker.thread.is_alive():
+                    raise RuntimeError("校验浏览器正在关闭，请稍后重试")
         if not result.get("success"):
             raise RuntimeError(str(result.get("error") or "校验登录失败"))
         data = dict(result.get("data") or {})
@@ -2796,7 +2923,7 @@ class DesktopApi:
         if logged_in:
             message = f"{account_name} 登录状态正常"
         elif has_logged_in:
-            message = f"{account_name} 登录已过期，请打开 OriginalDoubao 重新登录"
+            message = f"{account_name} 登录已过期，请打开 {platform_label} 重新登录"
         else:
             message = f"{account_name} 尚未登录"
         return {
@@ -2818,6 +2945,12 @@ class DesktopApi:
         worker_cls: type[AccountBrowserWorker] = AccountBrowserWorker,
     ) -> AccountBrowserWorker:
         with self._lock:
+            login_browser = getattr(self, "_login_browsers", {}).get(account_id)
+            if account_id in getattr(self, "_login_browsers", {}) and (
+                account_id not in getattr(self, "_finishing_logins", set())
+                or login_browser is None or login_browser.process.poll() is None
+            ):
+                raise ValueError("请先完成 Dola 登录，再启动账号浏览器")
             worker = self._workers.get(account_id)
             if worker is None:
                 worker = worker_cls(self, account_id, visible)
@@ -2848,7 +2981,7 @@ class DesktopApi:
                     return
                 task.update({
                     "status": "failed",
-                    "statusText": "OriginalDoubao 浏览器异常退出，账号已自动释放；请重试或切换其他账号",
+                    "statusText": f"{worker.platform_label} 浏览器异常退出，账号已自动释放；请重试或切换其他账号",
                     "progress": 0,
                 })
             self._account_usage.pop(account_id, None)
@@ -2863,7 +2996,11 @@ class DesktopApi:
     def shutdown(self, *_: Any) -> None:
         with self._lock:
             workers = list(self._workers.values())
+            login_browsers = list(self._login_browsers.values())
             self._persist_tasks_locked()
+        for browser in login_browsers:
+            if browser is not None:
+                browser.request_close()
         for worker in workers:
             worker.stop()
         self._media_server.shutdown()
@@ -2974,6 +3111,8 @@ class DesktopApi:
             # 深拷贝：调用方会就地写入运行时字段，不能污染缓存对象。
             return [dict(item) for item in cached_result]
         result = self._read_accounts_uncached()
+        for account in result:
+            account["accountType"] = normalize_account_type(account.get("accountType"))
         self._accounts_read_cache = (now, [dict(item) for item in result])
         return result
 
@@ -3016,6 +3155,8 @@ class DesktopApi:
             return cached_accounts
 
     def _write_accounts(self, accounts: list[dict[str, Any]]) -> None:
+        for account in accounts:
+            account["accountType"] = normalize_account_type(account.get("accountType"))
         # 账号数据发生变化，立即失效读缓存，避免后续读取拿到旧列表。
         self._accounts_read_cache = (0.0, [])
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -3124,6 +3265,7 @@ class DesktopApi:
                         cloud_accounts.append({
                             "id": account_id,
                             "name": name[:30],
+                            "accountType": normalize_account_type(item.get("accountType")),
                             "sortOrder": int(item.get("sortOrder", index)) if str(item.get("sortOrder", index)).isdigit() else index,
                             "hasLoggedIn": bool(item.get("hasLoggedIn", False)),
                             "quotaExhaustedOn": str(item.get("quotaExhaustedOn") or ""),
@@ -3143,6 +3285,7 @@ class DesktopApi:
                         migrated = {
                             "id": local_id,
                             "name": local_name[:30],
+                            "accountType": normalize_account_type(local.get("accountType")),
                             "sortOrder": len(cloud_accounts),
                             "hasLoggedIn": bool(local.get("hasLoggedIn", False)),
                             "quotaExhaustedOn": str(local.get("quotaExhaustedOn") or ""),
@@ -3192,6 +3335,7 @@ class DesktopApi:
             {
                 "id": str(item.get("id") or ""),
                 "name": str(item.get("name") or ""),
+                "accountType": normalize_account_type(item.get("accountType")),
                 "sortOrder": index,
                 "hasLoggedIn": bool(item.get("hasLoggedIn", False)),
                 "quotaExhaustedOn": str(item.get("quotaExhaustedOn") or ""),
@@ -3319,7 +3463,9 @@ class DesktopApi:
             return fallback
 
     def _account_daily_quota(self, account: dict[str, Any]) -> int:
-        return max(1, min(self._non_negative_int(self.get_settings().get("dailyVideoQuota"), 3), 99))
+        is_dola = normalize_account_type(account.get("accountType")) == "dola"
+        key, default = ("dolaDailyVideoQuota", 4) if is_dola else ("dailyVideoQuota", 3)
+        return max(1, min(self._non_negative_int(self.get_settings().get(key), default), 99))
 
     def _record_account_generation_success(self, account_id: str, token: str = "") -> None:
         clean_account_id = str(account_id or "").strip()
@@ -3373,6 +3519,8 @@ class DesktopApi:
     def _acquire_account_usage(self, account_id: str, owner_id: str, usage_type: str) -> None:
         clean_account_id = str(account_id or "").strip()
         with self._lock:
+            if clean_account_id in getattr(self, "_login_browsers", {}):
+                raise ValueError("请先完成 Dola 登录，再启动生成任务")
             existing = self._account_usage.get(clean_account_id)
             if existing is not None:
                 raise ValueError("该账号正在运行中，请等待释放或在设置中心手动释放")
@@ -3386,35 +3534,56 @@ class DesktopApi:
         self,
         preferred_account_id: str,
         owner_id: str,
+        account_type: str = "",
     ) -> dict[str, Any]:
         today = date.today().isoformat()
+        preferred_id = str(preferred_account_id or "").strip()
+        automatic_platform = account_type == "auto"
+        all_accounts = self._read_accounts()
         login_expired = getattr(self, "_login_expired", {})
+        preferred = next((item for item in all_accounts if item.get("id") == preferred_id), None)
+        if automatic_platform:
+            preferred_type = ""
+        elif account_type:
+            preferred_type = normalize_account_type(account_type)
+        else:
+            preferred_type = normalize_account_type(preferred.get("accountType")) if preferred else ""
         accounts = [
             account
-            for account in self._read_accounts()
+            for account in all_accounts
             if str(account.get("id") or "").strip()
+            and (not preferred_type or normalize_account_type(account.get("accountType")) == preferred_type)
             and str(account.get("quotaExhaustedOn") or "") != today
             and not login_expired.get(str(account.get("id") or "").strip())
         ]
-        preferred_id = str(preferred_account_id or "").strip()
-        accounts.sort(key=lambda account: (
-            0 if str(account.get("id") or "") == preferred_id else 1,
-            int(account.get("sortOrder") or 0),
-        ))
+        if automatic_platform:
+            with self._lock:
+                workers = dict(getattr(self, "_workers", {}))
+            usable_accounts = []
+            for account in accounts:
+                worker = workers.get(str(account.get("id") or ""))
+                authenticated = worker.authenticated if worker is not None else None
+                if authenticated is False or (authenticated is not True and not account.get("hasLoggedIn")):
+                    continue
+                if str(account.get("quotaUsageDate") or "") == today and self._non_negative_int(account.get("generatedToday"), 0) >= self._account_daily_quota(account):
+                    continue
+                usable_accounts.append(account)
+            accounts = usable_accounts
+        else:
+            accounts.sort(key=lambda account: (
+                0 if str(account.get("id") or "") == preferred_id else 1,
+                int(account.get("sortOrder") or 0),
+            ))
         if not accounts:
-            raise ValueError("没有可用的生成账号，请检查账号登录态或今日额度")
+            platform_label = account_platform({"accountType": preferred_type})["label"] if preferred_type else ""
+            raise ValueError(f"没有可用的{platform_label}生成账号，请检查账号登录态或今日额度")
 
         with self._lock:
-            account = next(
-                (
-                    item
-                    for item in accounts
-                    if str(item.get("id") or "").strip() not in self._account_usage
-                ),
-                None,
-            )
-            if account is None:
+            available = [item for item in accounts if str(item.get("id") or "").strip() not in self._account_usage
+                         and str(item.get("id") or "").strip() not in getattr(self, "_login_browsers", {})]
+            if not available:
                 raise ValueError("所有可用生成账号都在运行中，请等待任一任务完成")
+            account = random.choice(available) if automatic_platform else available[0]
             account_id = str(account.get("id") or "").strip()
             self._account_usage[account_id] = {
                 "ownerId": str(owner_id),
@@ -3443,6 +3612,9 @@ class DesktopApi:
                 if self._tasks[task_id].get("manuallyReleased") or self._tasks[task_id].get("cancelled"):
                     return
                 previous_status = self._tasks[task_id].get("status")
+                if "statusText" in values:
+                    platform_label = account_platform(self._tasks[task_id])["label"]
+                    values["statusText"] = str(values["statusText"]).replace("OriginalDoubao", platform_label).replace("豆包", platform_label)
                 self._tasks[task_id].update(values)
                 # 记录结束时间，前端悬浮窗据此短暂展示"已完成/失败"。
                 if should_release:
@@ -3453,6 +3625,19 @@ class DesktopApi:
                 terminal_task = dict(self._tasks[task_id]) if should_release else None
         if should_consume_quota and account_id:
             self._record_account_generation_success(account_id)
+        if (
+            terminal_task is not None
+            and account_id
+            and normalize_account_type(terminal_task.get("accountType")) == "dola"
+            and terminal_task.get("quotaExhaustedAfterGeneration")
+        ):
+            # The worker sets this only after the submitted video has returned.
+            # Apply it after normal success accounting but before releasing the
+            # account, so automatic assignment cannot pick it in between.
+            self.mark_account_quota_exhausted(
+                account_id,
+                reason="Dola 已提示今日剩余 0 个视频生成额度，本次视频已生成",
+            )
         if should_release and account_id:
             self._release_account_usage(account_id, task_id)
         # 任务进入终态后，由后端直接把结果回写到业务数据（分镜/资产），

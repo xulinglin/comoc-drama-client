@@ -391,8 +391,15 @@ const seedanceModelOptions = computed(() => videoApiModels.value
     value: String(model.id ?? model.modelName ?? ''),
   })))
 const generationEngineOptions = [
-  { label: 'OriginalDoubao', value: 'doubao' },
+  { label: 'Do · 自动', value: 'do' },
+  { label: 'OriginaDoubao', value: 'doubao' },
+  { label: 'Dola', value: 'dola' },
   { label: 'Seedance', value: 'seedance' },
+]
+const doAccountOptions = [
+  { label: '自动', value: 'do' },
+  { label: 'OriginaDoubao', value: 'doubao' },
+  { label: 'Dola', value: 'dola' },
 ]
 const importedSummary = computed(() => {
   if (!importedFileName.value) return '支持最终 JSON 2.0：资产、提示词和分镜一次导入'
@@ -414,7 +421,7 @@ function createStoryboard(index) {
     references: [],
     referenceLabels: {},
     mode: 'reference',
-    generationEngine: 'doubao',
+    generationEngine: 'do',
     seedanceModel: defaultSeedanceModel.value,
     seedanceTaskId: '',
     seedanceTaskCreatedAt: 0,
@@ -600,6 +607,7 @@ async function hydrateRunningTasks(detail) {
     if (!task) return
     if (isActiveTask(task)) {
       const engine = String(task.generationEngine || '')
+      if (engine === 'do' || engine === 'doubao' || engine === 'dola') shot.generationEngine = engine
       if (engine === 'seedance') {
         // Seedance 轮询依赖分镜自带的 seedanceTaskId/seedanceModel，
         // 不能用任务表 id 覆盖分镜的 taskId。
@@ -1607,6 +1615,8 @@ function sendAttachments(shot) {
   return result
 }
 
+const ORIGINAL_DOUBAO_MATERIAL_PLEDGE = '本次视频生成使用的参考图片均为 AI 生成的原创虚构角色，不对应现实人物，仅用于虚构剧情创作。'
+
 function promptForOriginalDoubao(prompt, references, omittedReferences = []) {
   const attachmentNames = new Map()
   const omittedNames = new Map(omittedReferences.map(asset => [
@@ -1630,7 +1640,7 @@ function promptForOriginalDoubao(prompt, references, omittedReferences = []) {
   const availableAudioNames = audioNames.filter(name => !directlyUsed.has(name))
   const availableImageNames = imageNames.filter(name => !directlyUsed.has(name))
   const fallbackNames = new Map()
-  return source.replace(tokenPattern, (token, id) => {
+  const mappedPrompt = source.replace(tokenPattern, (token, id) => {
     const key = String(id).toLowerCase()
     const directName = attachmentNames.get(key)
     if (directName) return directName
@@ -1643,7 +1653,10 @@ function promptForOriginalDoubao(prompt, references, omittedReferences = []) {
     if (!fallbackName) return token
     fallbackNames.set(key, fallbackName)
     return fallbackName
-  })
+  }).trim()
+  return mappedPrompt.endsWith(ORIGINAL_DOUBAO_MATERIAL_PLEDGE)
+    ? mappedPrompt
+    : `${mappedPrompt}\n\n${ORIGINAL_DOUBAO_MATERIAL_PLEDGE}`
 }
 
 function layoutDependencyIds(asset) {
@@ -1761,7 +1774,7 @@ function originalDoubaoSendPreview(shot) {
     return `${name} ← ${asset.name || asset.id || '未命名素材'}`
   })
   return [
-    '【发送方式】OriginalDoubao 桌面会话',
+    `【发送方式】${generationEngineLabel(shot)} 桌面会话`,
     `【附件】${attachments.length ? `\n${attachments.join('\n')}` : '无'}`,
     `【过滤规则】音频附件不发送${omittedAudio.length ? `（已过滤 ${omittedAudio.length} 个）` : ''}`,
     `【实际文本】\n${promptForOriginalDoubao(shot.prompt, references, omittedAudio).trim()}`,
@@ -2143,7 +2156,8 @@ async function pollShot(shot) {
 }
 
 function generationEngineLabel(shot) {
-  if (shot.generationEngine !== 'seedance') return 'doubao'
+  if (shot.generationEngine === 'do') return 'Do · 自动'
+  if (shot.generationEngine !== 'seedance') return shot.generationEngine === 'dola' ? 'Dola' : 'OriginaDoubao'
   return seedanceModelOptions.value.find(option => option.value === shot.seedanceModel)?.label || 'Seedance'
 }
 
@@ -2378,6 +2392,7 @@ async function generateShot(shot) {
       mode: shot.mode,
       model: props.videoModel,
       accountId: props.selectedAccountId,
+      accountType: shot.generationEngine === 'do' ? 'auto' : shot.generationEngine === 'dola' ? 'dola' : 'doubao',
       autoAssignAccount: true,
       token: props.token,
       persistResult: true,
@@ -2539,7 +2554,7 @@ onBeforeUnmount(() => {
           <span>{{ assets.length }} 项资产</span><span>{{ storyboards.length }} 个分镜</span>
           <label class="workbench-project-link" aria-label="关联项目"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7.5 12.5 12.5 7.5M6 9l-1.5 1.5a3 3 0 0 0 4.2 4.2l1.5-1.5M14 11l1.5-1.5a3 3 0 0 0-4.2-4.2L9.8 6.8"/></svg><UiSelect v-model="activeVideoProject.projectId" :options="projectLinkOptions" :placeholder="availableProjects.length ? '关联项目' : '暂无项目'" :disabled="!availableProjects.length" /></label>
           <input v-model="activeVideoProject.description" class="video-project-description" aria-label="任务描述" placeholder="添加任务描述…" />
-          <span>OriginalDoubao / Seedance</span>
+          <span>Do / Seedance</span>
         </div>
       </div>
       <div class="workbench-head-actions">
@@ -2676,9 +2691,9 @@ onBeforeUnmount(() => {
                 <fieldset class="settings-field-wide generation-model-field">
                   <legend>生成模型</legend>
                   <div class="generation-model-options" role="radiogroup" aria-label="选择视频生成模型">
-                    <button type="button" class="generation-model-card" :class="{ active: shot.generationEngine !== 'seedance' }" :aria-pressed="shot.generationEngine !== 'seedance'" @click="selectGenerationEngine(shot, 'doubao')">
-                      <span class="generation-model-icon doubao" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 6.5h14v9H9l-4 3v-12Z"/><path d="m15.5 3 .7 2.1 2.1.7-2.1.7-.7 2.1-.7-2.1-2.1-.7 2.1-.7.7-2.1Z"/></svg></span>
-                      <span class="generation-model-copy"><strong>OriginalDoubao</strong><small>桌面会话 · 自动操作</small></span>
+                    <button type="button" class="generation-model-card" :class="{ active: isOriginalDoubaoEngine(shot) }" :aria-pressed="isOriginalDoubaoEngine(shot)" @click="selectGenerationEngine(shot, isOriginalDoubaoEngine(shot) ? (shot.generationEngine || 'doubao') : 'do')">
+                      <span class="generation-model-icon do" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 6.5h14v9H9l-4 3v-12Z"/><path d="m15.5 3 .7 2.1 2.1.7-2.1.7-.7 2.1-.7-2.1-2.1-.7 2.1-.7.7-2.1Z"/></svg></span>
+                      <span class="generation-model-copy"><strong>Do</strong><small>桌面会话 · 自动操作</small></span>
                       <em>WEB</em><i aria-hidden="true">✓</i>
                     </button>
                     <button type="button" class="generation-model-card" :class="{ active: shot.generationEngine === 'seedance' }" :aria-pressed="shot.generationEngine === 'seedance'" :disabled="!seedanceModelOptions.length" @click="selectGenerationEngine(shot, 'seedance')">
@@ -2687,6 +2702,8 @@ onBeforeUnmount(() => {
                       <em>API</em><i aria-hidden="true">✓</i>
                     </button>
                   </div>
+                  <label v-if="isOriginalDoubaoEngine(shot)" class="do-account-select"><span>Do 账号选择</span><UiSelect :model-value="shot.generationEngine || 'doubao'" :options="doAccountOptions" @update:model-value="selectGenerationEngine(shot, $event)" /></label>
+                  <small v-if="shot.generationEngine === 'do'" class="do-account-hint">自动从 OriginaDoubao 和 Dola 的可用账号中分配</small>
                   <label v-if="shot.generationEngine === 'seedance'" class="seedance-model-select"><span>Seedance API 模型</span><UiSelect v-model="shot.seedanceModel" :options="seedanceModelOptions" :disabled="!seedanceModelOptions.length" :placeholder="seedanceModelOptions.length ? '选择具体模型' : '暂无可用模型'" status badge="API" /></label>
                 </fieldset>
                 <fieldset class="settings-field-wide"><legend>视频比例</legend><div class="ratio-options"><button v-for="ratioOption in videoRatios" :key="ratioOption" type="button" :class="{ active: shot.ratio === ratioOption }" @click="shot.ratio = ratioOption"><svg viewBox="0 0 24 24"><rect :x="ratioOption === '9:16' || ratioOption === '3:4' ? 8 : 5" :y="ratioOption === '9:16' || ratioOption === '3:4' ? 4 : 7" :width="ratioOption === '9:16' || ratioOption === '3:4' ? 8 : 14" :height="ratioOption === '9:16' || ratioOption === '3:4' ? 16 : 10" rx="1"/></svg><span>{{ ratioOption }}</span></button></div></fieldset>
@@ -2721,7 +2738,7 @@ onBeforeUnmount(() => {
             </div>
             <div v-else-if="shotRunning(shot)" class="shot-result-progress">
               <span class="result-spinner"></span>
-              <div><strong>{{ shot.statusText || '正在生成视频' }}</strong><small>{{ shot.requiresManualVerification ? '请切换到 OriginalDoubao 浏览器手动点击确认' : '完成后将在这里直接显示并播放' }}</small></div>
+              <div><strong>{{ shot.statusText || '正在生成视频' }}</strong><small>{{ shot.requiresManualVerification ? `请切换到 ${generationEngineLabel(shot)} 浏览器手动点击确认` : '完成后将在这里直接显示并播放' }}</small></div>
               <b>{{ shot.progress }}%</b>
               <i><em :style="{ width: `${shot.progress}%` }"></em></i>
             </div>
@@ -3913,7 +3930,7 @@ onBeforeUnmount(() => {
 .storyboard-toolbar .generation-model-card:disabled { cursor: not-allowed; opacity: .42; }
 .generation-model-icon { display: grid; width: 38px; height: 38px; box-sizing: border-box; place-items: center; border: 1px solid #3b414a; border-radius: 10px; color: #bfc5cd; background: #22262c; }
 .generation-model-icon svg { width: 21px !important; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.55; stroke-linecap: round; stroke-linejoin: round; }
-.generation-model-card.active .generation-model-icon.doubao { border-color: #6d7580; color: #fff; background: #353a42; }
+.generation-model-card.active .generation-model-icon.do { border-color: #6d7580; color: #fff; background: #353a42; }
 .generation-model-card.active .generation-model-icon.seedance { border-color: #61758c; color: #d9ebff; background: #253445; }
 .generation-model-copy { display: grid; min-width: 0; gap: 4px; }
 .generation-model-copy strong { overflow: hidden; color: inherit; font-size: 13px; font-weight: 700; text-overflow: ellipsis; }
@@ -3924,6 +3941,10 @@ onBeforeUnmount(() => {
 .generation-model-field .seedance-model-select { display: grid; grid-template-columns: 132px minmax(0,1fr); align-items: center; gap: 10px; margin-top: 9px; padding: 8px 9px; border: 1px solid #30353d; border-radius: 10px; background: #12151a; }
 .generation-model-field .seedance-model-select > span { overflow: hidden; color: #8a939f; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .generation-model-field .seedance-model-select :deep(.ui-select-trigger) { min-height: 36px; border-radius: 8px; }
+.do-account-select { display: grid; grid-template-columns: 132px minmax(0,1fr); align-items: center; gap: 10px; margin-top: 9px; padding: 8px 9px; border: 1px solid #30353d; border-radius: 10px; background: #12151a; }
+.do-account-select > span { color: #8a939f; font-size: 10px; }
+.do-account-select :deep(.ui-select-trigger) { min-height: 36px; border-radius: 8px; }
+.do-account-hint { display: block; margin: 7px 9px 2px; color: #8a939f; font-size: 10px; }
 
 /* In the two-column card, the generated video fills the complete result pane. */
 .storyboard-column-shell { display: flex; overflow: hidden; flex-direction: column; border: 1px solid #383838; border-radius: 9px; background: #171717; }

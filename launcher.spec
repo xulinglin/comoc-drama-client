@@ -37,6 +37,7 @@ hiddenimports = [
     "model_seeds",
     "original_doubao_worker",
     "original_doubao_base",
+    "dola_login",
     "original_doubao_video_worker",
     "original_doubao_image_worker",
     "original_doubao_nomark",

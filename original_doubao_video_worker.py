@@ -15,21 +15,27 @@ from typing import Any
 
 import httpx
 
+from generation_accounts import is_platform_url
 from original_doubao_base import BaseAccountBrowserWorker, ManualOperationRequired, _secondary_monitor_chrome_args
 from original_doubao_nomark import (
     OriginalDoubaoVideoEvidence,
+    dola_video_parse,
     original_doubao_fplay_parse,
     original_doubao_video_parse,
     is_douyin_media_url,
+    is_dola_media_url,
     is_supported_conversion_url,
+    conversion_account_type,
+    platform_media_proxy,
 )
 
 
 # OriginalDoubao 最终生成/发送开关；关闭时保留填写好的内容，便于检查流程。
 ORIGINAL_DOUBAO_VIDEO_AUTO_SUBMIT_ENABLED = True
+ORIGINAL_DOUBAO_MATERIAL_PLEDGE = "本次视频生成使用的参考图片均为 AI 生成的原创虚构角色，不对应现实人物，仅用于虚构剧情创作。"
 
 
-def save_media_url(media_url: str, task_id: str, settings: dict[str, Any]) -> Path:
+def save_media_url(media_url: str, task_id: str, settings: dict[str, Any], *, referer: str = "https://www.doubao.com/") -> Path:
     """Download a resolved media URL without requiring a browser worker."""
 
     output_dir = Path(str(settings["outputDir"])).resolve()
@@ -59,9 +65,10 @@ def save_media_url(media_url: str, task_id: str, settings: dict[str, Any]) -> Pa
             ),
         }
     else:
-        headers = {"Referer": "https://www.doubao.com/", "User-Agent": "Mozilla/5.0"}
+        headers = {"Referer": referer, "User-Agent": "Mozilla/5.0"}
     try:
-        with httpx.stream("GET", media_url, headers=headers, follow_redirects=True, timeout=120) as response:
+        with httpx.stream("GET", media_url, headers=headers, follow_redirects=True, timeout=120,
+                          proxy=platform_media_proxy(referer)) as response:
             response.raise_for_status()
             with partial_path.open("wb") as output:
                 for chunk in response.iter_bytes(chunk_size=1024 * 1024):
@@ -100,8 +107,6 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
 
     # ------------------------------------------------------------------ 主流程
     def _generate(self, page: Any, task_id: str, payload: dict[str, Any]) -> None:
-        from constants import ORIGINAL_DOUBAO_URL
-
         listeners: tuple[Any, Any] | None = None
         try:
             if self.api.is_account_quota_exhausted_today(self.account_id):
@@ -114,9 +119,11 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
                 self._close_generation_window(page)
                 return
             self.api._update_task(task_id, status="opening", statusText="正在打开 OriginalDoubao 创作页面", progress=10)
-            if not page.url.startswith("https://www.doubao.com"):
-                page.goto(ORIGINAL_DOUBAO_URL, wait_until="domcontentloaded", timeout=60_000)
+            if not self._is_platform_page(page):
+                page.goto(self.home_url, wait_until="domcontentloaded", timeout=60_000)
             page.wait_for_timeout(1500)
+            if self.account_type == "dola" and not self._check_login(page.context, page)["loggedIn"]:
+                raise RuntimeError("Dola 登录已过期，请重新登录后重试")
             self._dismiss_download_desktop_dialog(page)
 
             # Never reuse the previous task's conversation. Generation may
@@ -175,7 +182,10 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
             self._upload_attachments(page, attachments)
 
             self.api._update_task(task_id, status="submitting", statusText="正在填写视频描述", progress=38)
-            self._fill_prompt(page, str(payload["prompt"]))
+            prompt = str(payload["prompt"]).strip()
+            if not prompt.endswith(ORIGINAL_DOUBAO_MATERIAL_PLEDGE):
+                prompt = f"{prompt}\n\n{ORIGINAL_DOUBAO_MATERIAL_PLEDGE}"
+            self._fill_prompt(page, prompt)
 
             if not ORIGINAL_DOUBAO_VIDEO_AUTO_SUBMIT_ENABLED:
                 # 使用现有终止状态停止轮询、释放账号；未生成视频，不扣生成次数。
@@ -265,7 +275,7 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
     # ------------------------------------------------------------ 视频创作入口
     def _open_video_creation(self, page: Any) -> None:
         for attempt in range(3):
-            exact = page.get_by_text(re.compile(r"^视频生成$"))
+            exact = page.get_by_text(re.compile(r"^(?:视频生成|Create Videos|Generate Videos|Video Generation)$", re.I))
             for index in range(min(exact.count(), 12)):
                 item = exact.nth(index)
                 if item.is_visible():
@@ -276,7 +286,7 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
                     except Exception:
                         continue
 
-            names = re.compile(r"视频生成|生成视频|AI\s*视频|AI创作|图片生成视频")
+            names = re.compile(r"视频生成|生成视频|AI\s*视频|AI\s*创作|图片生成视频|Create Videos|Generate Videos|Video Generation|AI\s*Creation", re.I)
             candidates = page.get_by_text(names)
             for index in range(min(candidates.count(), 12)):
                 item = candidates.nth(index)
@@ -284,6 +294,8 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
                     try:
                         item.click(timeout=3000)
                         page.wait_for_timeout(1000)
+                        if re.fullmatch(r"AI\s*(?:创作|Creation)", item.inner_text().strip(), re.I):
+                            break
                         return
                     except Exception:
                         continue
@@ -312,7 +324,8 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
 
         # Otherwise open the model selector first, then choose Fast explicitly.
         selectors = (
-            page.get_by_role("button", name=re.compile(r"Seedance|选择模型|模型", re.I)),
+            page.get_by_role("button", name=re.compile(r"Seedance|选择模型|模型|Select model|Choose model|Model", re.I)),
+            page.get_by_text(re.compile(r"^(?:模型|Model)\s*[:：]?\s*\d", re.I)),
             page.locator('[role="combobox"]:visible'),
         )
         for selector in selectors:
@@ -334,8 +347,11 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
         raise RuntimeError(f"没有找到模型选项：{model_name}")
 
     def _configure_video(self, page: Any, ratio: str, duration: int) -> None:
-        trigger_pattern = re.compile(r"(自动|3:4|4:3|9:16|16:9|1:1|21:9)\s*[·・]\s*\d+\s*s", re.I)
+        trigger_pattern = re.compile(r"(自动|Auto|3:4|4:3|9:16|16:9|1:1|21:9)\s*[·・]\s*\d+\s*s", re.I)
         triggers = page.get_by_text(trigger_pattern)
+        if self.account_type == "dola" and not any(triggers.nth(i).is_visible() for i in range(triggers.count())):
+            self._configure_dola_video(page, ratio, duration)
+            return
         opened = False
         for index in range(triggers.count() - 1, -1, -1):
             trigger = triggers.nth(index)
@@ -351,7 +367,7 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
             raise RuntimeError("没有找到“比例 · 时长”设置入口")
 
         ratio_text = "自动" if ratio in ("auto", "自动") else ratio
-        ratio_options = page.get_by_text(ratio_text, exact=True)
+        ratio_options = page.get_by_text(re.compile(r"^(?:自动|Auto)$", re.I)) if ratio_text == "自动" else page.get_by_text(ratio_text, exact=True)
         ratio_selected = False
         for index in range(ratio_options.count() - 1, -1, -1):
             option = ratio_options.nth(index)
@@ -389,6 +405,47 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
         page.wait_for_timeout(350)
         page.locator("body").press("Escape")
 
+    @staticmethod
+    def _click_video_setting(page: Any, pattern: re.Pattern) -> bool:
+        controls = page.get_by_text(pattern)
+        for index in range(controls.count() - 1, -1, -1):
+            control = controls.nth(index)
+            try:
+                if control.is_visible():
+                    control.click(timeout=4000)
+                    page.wait_for_timeout(300)
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _configure_dola_video(self, page: Any, ratio: str, duration: int) -> None:
+        """Dola 中英文页面也有独立的「比例」和「10s」下拉控件。"""
+        ratio_names = r"自动|Auto|21:9|16:9|4:3|1:1|3:4|9:16"
+        if not self._click_video_setting(page, re.compile(rf"^(?:比例|Ratio|Aspect ratio|{ratio_names})$", re.I)):
+            raise RuntimeError("没有找到 Dola 画面比例设置入口")
+        option_pattern = re.compile(r"^(?:自动|Auto)$", re.I) if ratio in ("auto", "自动") else re.compile(rf"^{re.escape(ratio)}$")
+        if not self._click_video_setting(page, option_pattern):
+            raise RuntimeError(f"没有找到画面比例选项：{ratio}")
+        page.locator("body").press("Escape")
+        if not self._click_video_setting(page, re.compile(r"^(?:\d+\s*(?:s|秒)|时长|Duration)$", re.I)):
+            raise RuntimeError("没有找到 Dola 视频时长设置入口")
+        sliders = page.locator('[role="slider"]:visible, input[type="range"]:visible')
+        if sliders.count():
+            slider = sliders.last
+            minimum = float(slider.get_attribute("min") or slider.get_attribute("aria-valuemin") or 4)
+            maximum = float(slider.get_attribute("max") or slider.get_attribute("aria-valuemax") or 15)
+            step = float(slider.get_attribute("step") or 1)
+            steps = (duration - minimum) / step
+            if not minimum <= duration <= maximum or not steps.is_integer():
+                raise RuntimeError(f"Dola 当前模型不支持 {duration} 秒时长")
+            slider.press("Home", timeout=4000)
+            for _ in range(int(steps)):
+                slider.press("ArrowRight", timeout=2000)
+        elif not self._click_video_setting(page, re.compile(rf"^{duration}\s*(?:s|秒)$", re.I)):
+            raise RuntimeError(f"没有找到 Dola 视频时长选项：{duration}s")
+        page.locator("body").press("Escape")
+
     # ------------------------------------------------------------ 结果监听 / 抓取
     def _listen_for_video_evidence(
         self,
@@ -406,7 +463,7 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
         def on_request(request: Any) -> None:
             if not belongs_to_bound_conversation():
                 return
-            if not any(host in request.url for host in ("doubao.com", "douyin.com", "365yg.com")):
+            if not any(host in request.url for host in (self.platform_domain, "douyin.com", "365yg.com", "byteoversea.com", "ibytedtos.com")):
                 return
             evidence.add(request.url)
             try:
@@ -418,7 +475,7 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
             if not belongs_to_bound_conversation():
                 return
             url = response.url
-            if not any(host in url for host in ("doubao.com", "douyin.com", "365yg.com")):
+            if not any(host in url for host in (self.platform_domain, "douyin.com", "365yg.com", "byteoversea.com", "ibytedtos.com")):
                 return
             evidence.add(url)
             try:
@@ -464,6 +521,7 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
         confirmation_sent = False
         manual_confirmation_waiting = False
         authorized_material_confirmation_rounds = 0
+        quota_exhausted_after_generation = False
         for tick in range(900):
             page.wait_for_timeout(2000)
             if not page.context.pages:
@@ -532,6 +590,9 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
                     progress=55,
                     requiresManualVerification=False,
                 )
+            quota_exhausted_after_generation = (
+                quota_exhausted_after_generation or self._dola_generation_reports_zero_quota(page)
+            )
             blocked_reason, requires_manual_verification = self._generation_block_reason(page)
             if blocked_reason:
                 if "登录已过期" in blocked_reason or "会话失效" in blocked_reason:
@@ -564,7 +625,7 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
                 )
                 self._fill_prompt(
                     page,
-                    "我确认开始生成视频",
+                    "I confirm, start generating the video." if self.account_type == "dola" else "我确认开始生成视频",
                 )
                 self._click_generate(page)
                 self.api._update_task(
@@ -599,6 +660,7 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
                     status="sharing",
                     statusText="视频已返回，正在读取视频标识",
                     progress=94,
+                    quotaExhaustedAfterGeneration=quota_exhausted_after_generation,
                 )
                 page_evidence = OriginalDoubaoVideoEvidence()
                 self._collect_page_video_evidence(page, page_evidence)
@@ -613,7 +675,7 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
                 # needs the generated video's ID, which normally appears in
                 # OriginalDoubao's JSON responses or media URLs. Touch the Share UI
                 # only as a last-resort compatibility fallback.
-                if not evidence.video_ids:
+                if not evidence.video_ids and self.account_type != "dola":
                     share_url = self._obtain_video_share_url(page, evidence)
                     if share_url:
                         evidence.add(share_url)
@@ -745,6 +807,52 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
         self._stop_video_evidence_listener(page, listeners)
         raise RuntimeError("等待生成结果超时")
 
+    def _dola_generation_reports_zero_quota(self, page: Any) -> bool:
+        """Latch the submitted video's zero balance, without stopping its generation."""
+        if self.account_type != "dola":
+            return False
+        try:
+            messages = page.locator(
+                '[data-message-author-role="assistant"]:visible, '
+                '[data-testid*="assistant-message"]:visible, [class*="assistant-message"]:visible'
+            )
+            if messages.count():
+                text = messages.last.inner_text(timeout=1_000)
+            else:
+                # Do not mistake a quoted acknowledgement in the user's prompt
+                # for a Dola response. The body fallback supports unlabelled UI.
+                if page.locator(
+                    '[data-message-author-role="user"]:visible, '
+                    '[data-testid*="user-message"]:visible, [class*="user-message"]:visible'
+                ).count():
+                    return False
+                text = page.locator("body").inner_text(timeout=1_000)
+        except Exception:
+            return False
+        clean_text = re.sub(r"[*_`]+", "", text)
+        normalized = re.sub(r"\s+", "", clean_text)
+        zero_remaining = bool(
+            re.search(r"今日剩余(?:0|零)个视频生成额度", normalized)
+            or re.search(
+                r"\b0\s+video\s+(?:generation\s+)?credits?\s+(?:remaining|left)\s+(?:for\s+)?today\b"
+                r"|\b(?:remaining|left)\s+video\s+(?:generation\s+)?credits?\s+(?:for\s+)?today\s*[:：]?\s*0\b"
+                r"|\btoday['’]s\s+remaining\s+video\s+(?:generation\s+)?credits?\s*[:：]?\s*0\b",
+                clean_text, re.I,
+            )
+        )
+        # A refusal also mentions exhausted credits. Require confirmation that
+        # this video was accepted and is being generated before deferring it.
+        generating = bool(
+            self._generation_waiting_message_from_text(clean_text)
+            or re.search(
+                r"video\s+(?:is\s+being\s+generated|generation\s+(?:has\s+been\s+|is\s+)?(?:submitted|started))"
+                r"|(?:I\s+will|I'll|we\s+will|we'll).{0,80}(?:send|notify|share).{0,80}(?:video|ready)"
+                r"|(?:estimated|expected)\s+wait(?:ing)?\s*(?:time)?\s*[:：]?\s*\d+\s*(?:minutes?|mins?)",
+                clean_text, re.I | re.S,
+            )
+        )
+        return zero_remaining and generating
+
     def _generation_waiting_message(self, page: Any) -> str:
         try:
             text = page.locator("body").inner_text(timeout=2000)
@@ -802,6 +910,7 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
                 headers=headers,
                 follow_redirects=True,
                 timeout=30,
+                proxy=platform_media_proxy(self.home_url),
             ) as response:
                 response.raise_for_status()
                 for chunk in response.iter_bytes(chunk_size=16 * 1024):
@@ -935,10 +1044,19 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
         video_ids = list(reversed(evidence.video_ids))
         if not video_ids:
             return []
+        if not is_platform_url(str(page.url), self.platform_domain):
+            raise ValueError("视频解析页面与账号平台不一致，请重新打开对应账号")
+        if self.account_type == "dola":
+            cookies = self._browser_cookie_dict(page)
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="dola-nomark") as executor:
+                return executor.submit(lambda: asyncio.run(
+                    dola_video_parse(video_ids, cookies, proxy=platform_media_proxy(self.home_url))
+                )).result(timeout=180)
         models = page.evaluate(
             """
             async (videoIds) => {
               const models = [];
+              let error = '';
               for (const videoId of videoIds) {
                 try {
                   const response = await fetch(
@@ -951,6 +1069,11 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
                     }
                   );
                   const result = await response.json();
+                  if (result?.code && result.code !== 0) {
+                    error = String(result.msg || result.message || '视频模型解析失败');
+                    if (result.code === 710012001) error = '账号登录已过期，请重新登录';
+                    if (result.code === 710022003) error = 'Dola 当前网络受地区限制，请检查账号浏览器使用的网络';
+                  }
                   for (const item of result?.data?.results || []) {
                     let model = item?.video_model_result?.video_model;
                     if (typeof model === 'string') {
@@ -962,17 +1085,22 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
                   }
                 } catch (_) {}
               }
-              return models;
+              return {models, error};
             }
             """,
             video_ids,
         )
+        if isinstance(models, dict):
+            if not models.get("models") and models.get("error"):
+                raise ValueError(str(models["error"]))
+            models = models.get("models", [])
         for model in models or []:
             try:
                 with ThreadPoolExecutor(max_workers=1, thread_name_prefix="original-doubao-fplay") as executor:
                     videos = executor.submit(
                         lambda item=model: asyncio.run(
-                            original_doubao_fplay_parse(str(item["fallback_api"]), str(item["video_id"]))
+                            original_doubao_fplay_parse(str(item["fallback_api"]), str(item["video_id"]),
+                                                       referer=self.home_url, proxy=platform_media_proxy(self.home_url))
                         )
                     ).result(timeout=60)
                 if videos:
@@ -985,13 +1113,13 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
         try:
             return {
                 str(cookie["name"]): str(cookie["value"])
-                for cookie in page.context.cookies("https://www.doubao.com")
+                for cookie in page.context.cookies(self.home_url)
             }
         except Exception:
             return {}
 
     def _save_media_url(self, media_url: str, task_id: str, settings: dict[str, Any]) -> Path:
-        return save_media_url(media_url, task_id, settings)
+        return save_media_url(media_url, task_id, settings, referer=self.home_url)
 
     # ------------------------------------------------------------ 结果下载
     def _download_nomark_video(
@@ -1006,7 +1134,7 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
         if not force and not settings.get("autoDownload", True):
             return "", "OriginalDoubao 视频已生成，自动下载已关闭"
 
-        parser_error = "没有监听到本次视频的 video_id 或分享链接"
+        parser_error = "接口未返回无水印视频流" if evidence.video_ids else "没有监听到本次视频的 video_id 或分享链接"
         cookies = self._browser_cookie_dict(page)
         real_share_urls = [
             url for url in reversed(evidence.share_urls)
@@ -1020,9 +1148,13 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
                     task_id,
                     settings,
                 )
-                return str(output_path), f"已通过 OriginalDoubao 登录态保存无水印流：{output_path.name}"
+                return str(output_path), f"已通过 {self.platform_label} 登录态保存无水印流：{output_path.name}"
         except Exception as exc:
             parser_error = f"登录态解析失败：{exc}"
+
+        if self.account_type == "dola":
+            # 国际版在自己的登录页面解析，不进入豆包国内公开分享接口。
+            return "", f"Dola 无水印解析失败：{parser_error}"
 
         for share_url in real_share_urls:
             try:
@@ -1076,9 +1208,8 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
         if not force and not settings.get("autoDownload", True):
             return "", "OriginalDoubao 视频已生成，自动下载已关闭"
 
-        # Only use an explicit official no-watermark control. Do not extract
-        # hidden media URLs or intercept private responses.
-        names = re.compile(r"无水印下载|下载无水印|下载.*无水印")
+        # Fallback for pages exposing an explicit no-watermark download control.
+        names = re.compile(r"无水印下载|下载无水印|下载.*无水印|Download.*(?:without watermark|watermark.free)", re.I)
         options = page.get_by_text(names)
         for index in range(min(options.count(), 12)):
             option = options.nth(index)
@@ -1093,10 +1224,10 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
                 suffix = Path(download.suggested_filename).suffix or ".mp4"
                 output_path = output_dir / f"original_doubao_{task_id}{suffix}"
                 download.save_as(str(output_path))
-                return str(output_path), f"无水印视频已通过 OriginalDoubao 官方入口保存：{output_path.name}"
+                return str(output_path), f"无水印视频已通过 {self.platform_label} 官方入口保存：{output_path.name}"
             except Exception:
                 continue
-        return "", "OriginalDoubao 视频已生成，但页面未提供明确的官方无水印下载入口"
+        return "", f"{self.platform_label} 视频已生成，但页面未提供明确的官方无水印下载入口"
 
     def _download_watermarked_video(
         self,
@@ -1138,11 +1269,11 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
             except Exception as exc:
                 last_error = str(exc)
 
-        download_names = re.compile(r"^(?:下载|下载视频|保存视频)$")
+        download_names = re.compile(r"^(?:下载|下载视频|保存视频|Download|Download video|Save video)$", re.I)
         controls = (
             page.get_by_role("button", name=download_names),
             page.get_by_text(download_names),
-            page.locator('[aria-label*="下载"]:visible, [title*="下载"]:visible'),
+            page.locator('[aria-label*="下载"]:visible, [title*="下载"]:visible, [aria-label*="Download" i]:visible, [title*="Download" i]:visible'),
         )
         for control_group in controls:
             for index in range(min(control_group.count(), 12)):
@@ -1153,7 +1284,7 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
                         control.get_attribute("aria-label"),
                         control.get_attribute("title"),
                     )))
-                    if "无水印" in label or not control.is_visible():
+                    if "无水印" in label or re.search(r"without watermark|watermark.free", label, re.I) or not control.is_visible():
                         continue
                     with page.expect_download(timeout=15_000) as download_info:
                         control.click(timeout=5_000)
@@ -1172,7 +1303,51 @@ class OriginalDoubaoVideoWorker(BaseAccountBrowserWorker):
     def _convert_link(self, page: Any, link: str) -> dict[str, str]:
         clean_link = str(link).strip()
         if not is_supported_conversion_url(clean_link):
-            raise ValueError("请输入官方视频分享链接或抖音视频直链")
+            raise ValueError("请输入 Doubao / Dola 官方视频分享链接或视频直链")
+
+        if conversion_account_type(clean_link) != self.account_type:
+            raise ValueError("链接平台与所选账号不一致，请切换对应平台的账号")
+        if self.account_type == "dola":
+            evidence = OriginalDoubaoVideoEvidence()
+            evidence.add(clean_link)
+            direct_link = is_dola_media_url(clean_link)
+            if direct_link:
+                video_id = self._video_id_from_media_url(clean_link)
+                if not video_id:
+                    raise ValueError("Dola 视频直链中没有读取到 video_id；链接可能已过期，请重新复制")
+                evidence.add(f'{{"video_id":"{video_id}"}}')
+                if not is_platform_url(str(page.url), self.platform_domain):
+                    page.goto(self.home_url, wait_until="domcontentloaded", timeout=60_000)
+                    page.wait_for_timeout(1500)
+            else:
+                page.goto(clean_link, wait_until="domcontentloaded", timeout=60_000)
+                page.wait_for_timeout(1500)
+                self._collect_page_video_evidence(page, evidence)
+                if not evidence.video_ids:
+                    for media_url in reversed(evidence.media_urls):
+                        video_id = self._video_id_from_media_url(media_url)
+                        if video_id:
+                            evidence.add(f'{{"video_id":"{video_id}"}}')
+                            break
+            if "region-restricted" in str(page.url):
+                raise ValueError("Dola 当前网络受地区限制，无法读取视频下载入口")
+            if self._detect_login_state(page) == "login":
+                raise ValueError("Dola 页面需要登录，请打开对应账号完成登录后重试")
+            conversion_id = f"dola_link_{uuid.uuid4().hex[:10]}"
+            path, message = self._download_nomark_video(page, evidence, conversion_id, force=True)
+            if not path and not direct_link:
+                path, official_message = self._download_official_unwatermarked(page, conversion_id, force=True)
+                if path:
+                    message = official_message
+            if not path:
+                raise ValueError(f"{message}；未取得无水印原片，请确认 Dola 账号已登录且当前网络可用")
+            output_path = Path(path)
+            return {
+                "path": str(output_path), "name": output_path.name,
+                "previewUrl": self.api._media_url_for(str(output_path)),
+                "watermarkStatus": "official_unwatermarked",
+                "message": message,
+            }
 
         if is_douyin_media_url(clean_link):
             video_id = self._video_id_from_media_url(clean_link)

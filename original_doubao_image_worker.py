@@ -52,7 +52,7 @@ def _image_suffix_from_url(media_url: str) -> str:
     return ".png"
 
 
-def save_image_url(media_url: str, task_id: str, settings: dict[str, Any]) -> Path:
+def save_image_url(media_url: str, task_id: str, settings: dict[str, Any], *, referer: str = "https://www.doubao.com/") -> Path:
     """Download one generated image URL to the output directory."""
 
     output_dir = Path(str(settings["outputDir"])).resolve()
@@ -61,7 +61,7 @@ def save_image_url(media_url: str, task_id: str, settings: dict[str, Any]) -> Pa
     output_path = output_dir / f"original_doubao_{task_id}{suffix}"
     partial_path = output_path.with_name(f"{output_path.name}.part")
     headers = {
-        "Referer": "https://www.doubao.com/",
+        "Referer": referer,
         "Accept": "image/avif,image/webp,image/png,image/*,*/*;q=0.8",
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -112,11 +112,14 @@ class OriginalDoubaoImageWorker(BaseAccountBrowserWorker):
         填写提示词 / 点击发送），只把「视频生成」入口换成「图片生成」入口，并抓取
         页面返回的 `<img>` 结果。豆包账号仍来自账号管理，无需在图片模型里单独配置。
         """
-        from constants import ORIGINAL_DOUBAO_URL
-
         listeners: tuple[Any, Any] | None = None
         try:
-            if not self.api._has_saved_original_doubao_session(self.account_id):
+            logged_in = (
+                self._check_login(page.context, page)["loggedIn"]
+                if self.account_type == "dola"
+                else self.api._has_saved_original_doubao_session(self.account_id)
+            )
+            if not logged_in:
                 self.api._update_task(
                     task_id,
                     status="failed",
@@ -126,8 +129,8 @@ class OriginalDoubaoImageWorker(BaseAccountBrowserWorker):
                 self._close_generation_window(page)
                 return
             self.api._update_task(task_id, status="opening", statusText="正在打开豆包创作页面", progress=10)
-            if not page.url.startswith("https://www.doubao.com"):
-                page.goto(ORIGINAL_DOUBAO_URL, wait_until="domcontentloaded", timeout=60_000)
+            if not self._is_platform_page(page):
+                page.goto(self.home_url, wait_until="domcontentloaded", timeout=60_000)
             page.wait_for_timeout(1500)
             self._dismiss_download_desktop_dialog(page)
 
@@ -222,7 +225,7 @@ class OriginalDoubaoImageWorker(BaseAccountBrowserWorker):
         """点击豆包「图片生成」入口（对应视频流程里的「视频生成」入口）。"""
 
         for attempt in range(3):
-            exact = page.get_by_text(re.compile(r"^\s*图片生成\s*$"))
+            exact = page.get_by_text(re.compile(r"^\s*(?:图片生成|Create Images|Generate Images|Image Generation)\s*$", re.I))
             for index in range(min(exact.count(), 12)):
                 item = exact.nth(index)
                 if item.is_visible():
@@ -233,7 +236,7 @@ class OriginalDoubaoImageWorker(BaseAccountBrowserWorker):
                     except Exception:
                         continue
 
-            names = re.compile(r"图片生成|生成图片|AI\s*图片|AI绘画|AI绘图|文生图|图像生成")
+            names = re.compile(r"图片生成|生成图片|AI\s*图片|AI绘画|AI绘图|文生图|图像生成|Create Images|Generate Images|Image Generation", re.I)
             candidates = page.get_by_text(names)
             for index in range(min(candidates.count(), 12)):
                 item = candidates.nth(index)
@@ -318,7 +321,7 @@ class OriginalDoubaoImageWorker(BaseAccountBrowserWorker):
                 content_length = int(headers.get("content-length", "0") or 0)
             except Exception:
                 return
-            if not any(host in url for host in ("doubao.com", "byteimg.com", "bytedance")):
+            if not any(host in url for host in (self.platform_domain, "byteimg.com", "bytedance", "byteoversea.com", "ibytedtos.com")):
                 return
             if content_length > 4_000_000:
                 return
@@ -501,7 +504,7 @@ class OriginalDoubaoImageWorker(BaseAccountBrowserWorker):
         except Exception:
             return ""
         normalized = re.sub(r"\s+", "", text)
-        if re.search(r"图片生成中|正在生成图片|正在绘制|生成中", normalized):
+        if re.search(r"图片生成中|正在生成图片|正在绘制|生成中|generating\s+(?:an?\s+)?image|creating\s+(?:an?\s+)?image", text, re.I):
             return "豆包正在生成图片，请稍候"
         return ""
 
@@ -553,7 +556,7 @@ class OriginalDoubaoImageWorker(BaseAccountBrowserWorker):
                 return output_path
         except Exception:
             pass
-        return save_image_url(media_url, task_id, self.api.get_settings())
+        return save_image_url(media_url, task_id, self.api.get_settings(), referer=self.home_url)
 
 
 __all__ = [

@@ -33,8 +33,20 @@ const showSettings = ref(false)
 const showProjectFiles = ref(false)
 const settingsTab = ref('accounts')
 const newAccountName = ref('')
+const newAccountType = ref('doubao')
+const creatingAccount = ref(false)
+const accountTypeOptions = [
+  { label: 'OriginaDoubao', value: 'doubao' },
+  { label: 'Dola', value: 'dola' },
+]
+
+function accountTypeLabel(account) {
+  return accountTypeOptions.find(option => option.value === (account?.accountType || 'doubao'))?.label || '未知类型'
+}
 const accountMessage = ref('')
-const settings = ref({ defaultAccountId: '', outputDir: '', storageDir: '', autoDownload: true, dailyVideoQuota: 3 })
+const openingAccountId = ref('')
+const completingAccountId = ref('')
+const settings = ref({ defaultAccountId: '', outputDir: '', storageDir: '', autoDownload: true, dailyVideoQuota: 3, dolaDailyVideoQuota: 4 })
 const settingsMessage = ref('')
 const editingAccountId = ref('')
 const editingAccountName = ref('')
@@ -138,32 +150,43 @@ async function cancelGlobalTask(tk) {
 
 const authenticated = computed(() => Boolean(platformUser.value && authToken.value))
 const isRunning = computed(() => task.value && !['succeeded', 'failed'].includes(task.value.status))
-const canGenerate = computed(() => image.value && prompt.value.trim() && accounts.value.some(account => !account.quotaExhaustedToday && !account.inUse && !account.loginExpired) && !isRunning.value)
-const canConvertLink = computed(() => conversionLink.value.trim() && selectedAccountId.value && !selectedAccount.value?.inUse && !convertingLink.value)
+const canGenerate = computed(() => image.value && prompt.value.trim() && accounts.value.some(account => (!selectedAccount.value || (account.accountType || 'doubao') === (selectedAccount.value.accountType || 'doubao')) && !account.quotaExhaustedToday && !account.inUse && !account.loginExpired) && !isRunning.value)
+const conversionPlatform = computed(() => {
+  try {
+    const url = new URL(conversionLink.value.trim())
+    if (!['http:', 'https:'].includes(url.protocol)) return ''
+    if (['dola.com', 'www.dola.com'].includes(url.hostname) || (/^v\d+(?:-[a-z0-9-]+)?\.dola\.com$/.test(url.hostname) && url.pathname.includes('/video/tos/'))) return 'dola'
+    if (['doubao.com', 'www.doubao.com'].includes(url.hostname) || ((url.hostname === 'douyin.com' || url.hostname.endsWith('.douyin.com')) && url.pathname.includes('/video/tos/'))) return 'doubao'
+  } catch (_) {}
+  return ''
+})
+const conversionAccountMismatch = computed(() => Boolean(conversionPlatform.value && selectedAccount.value && conversionPlatform.value !== (selectedAccount.value.accountType || 'doubao')))
+const canConvertLink = computed(() => conversionLink.value.trim() && selectedAccountId.value && !conversionAccountMismatch.value && !selectedAccount.value?.inUse && !selectedAccount.value?.loginExpired && !convertingLink.value)
 const selectedAccount = computed(() => accounts.value.find(item => item.id === selectedAccountId.value))
 const accountOptions = computed(() => accounts.value.map(account => ({
   label: account.inUse
-    ? `${account.name}（运行中）`
+    ? `${account.name} · ${accountTypeLabel(account)}（运行中）`
     : account.loginExpired
-      ? `${account.name}（登录已过期）`
-      : `${account.name}（今日 ${accountQuotaRemaining(account)}/${dailyVideoQuota()}）`,
+      ? `${account.name} · ${accountTypeLabel(account)}（登录已过期）`
+      : `${account.name} · ${accountTypeLabel(account)}（今日 ${accountQuotaRemaining(account)}/${dailyVideoQuota(account)}）`,
   value: account.id,
   disabled: account.inUse || account.quotaExhaustedToday || account.loginExpired,
 })))
 // 只有曾经登录过的账号才需要校验登录状态；从未登录的账号直接跳过。
-const checkableAccounts = computed(() => accounts.value.filter(account => account.hasLoggedIn))
+const checkableAccounts = computed(() => accounts.value.filter(account => account.hasLoggedIn && !account.manualLoginPending))
 const generationProjectOptions = computed(() => generationProjects.value.map(project => ({ label: project.name || '未命名项目', value: String(project.id) })))
 
 function apiReady() {
   return window.pywebview?.api
 }
 
-function dailyVideoQuota() {
-  return Math.max(1, Number(settings.value.dailyVideoQuota) || 3)
+function dailyVideoQuota(account) {
+  const isDola = account?.accountType === 'dola'
+  return Math.max(1, Number(settings.value[isDola ? 'dolaDailyVideoQuota' : 'dailyVideoQuota']) || (isDola ? 4 : 3))
 }
 
 function accountQuotaRemaining(account) {
-  const limit = dailyVideoQuota()
+  const limit = dailyVideoQuota(account)
   if (account?.quotaExhaustedToday) return 0
   const rawRemaining = account?.quotaRemainingToday
   const remaining = Number(rawRemaining)
@@ -353,8 +376,9 @@ async function loadAppInfo() {
   }
   await loadAccounts()
   await loadGenerationProjects()
-  if (settings.value.defaultAccountId && accounts.value.some(item => item.id === settings.value.defaultAccountId && !item.quotaExhaustedToday && !item.inUse && !item.loginExpired)) {
-    selectedAccountId.value = settings.value.defaultAccountId
+  const defaultAccount = accounts.value.find(item => item.id === settings.value.defaultAccountId)
+  if (defaultAccount) {
+    selectedAccountId.value = accounts.value.find(item => (item.accountType || 'doubao') === (defaultAccount.accountType || 'doubao') && !item.quotaExhaustedToday && !item.inUse && !item.loginExpired)?.id || defaultAccount.id
   } else {
     selectedAccountId.value = accounts.value.find(item => !item.quotaExhaustedToday && !item.inUse && !item.loginExpired)?.id || ''
   }
@@ -380,11 +404,11 @@ async function loadGenerationProjects() {
 async function loadAccounts() {
   if (draggingAccountId.value || accountOrderSaving.value) return
   // 编辑/删除/重命名进行中时跳过轮询刷新，避免覆盖内联编辑态或与操作结果竞争。
-  if (editingAccountId.value || deletingAccountId.value || renamingAccountId.value) return
+  if (editingAccountId.value || deletingAccountId.value || renamingAccountId.value || creatingAccount.value) return
   accounts.value = await window.pywebview.api.list_accounts()
   const selected = accounts.value.find(item => item.id === selectedAccountId.value)
-  if (!selected || selected.quotaExhaustedToday || selected.inUse || selected.loginExpired) {
-    selectedAccountId.value = accounts.value.find(item => !item.quotaExhaustedToday && !item.inUse && !item.loginExpired)?.id || ''
+  if (!selected || (!selected.manualLoginPending && (selected.quotaExhaustedToday || selected.inUse || selected.loginExpired))) {
+    selectedAccountId.value = accounts.value.find(item => (!selected || (item.accountType || 'doubao') === (selected.accountType || 'doubao')) && !item.quotaExhaustedToday && !item.inUse && !item.loginExpired)?.id || selected?.id || ''
   }
 }
 
@@ -445,28 +469,99 @@ function endAccountDrag() {
 }
 
 async function createAccount() {
-  error.value = ''
+  if (creatingAccount.value) return
+  accountMessage.value = ''
+  const name = newAccountName.value.trim()
+  const accountType = newAccountType.value
+  if (!name) {
+    accountMessage.value = '请输入账号名称'
+    return
+  }
+  const api = apiReady()
+  const supportsAccountTypes = typeof api?.create_generation_account === 'function'
+  if (!supportsAccountTypes && accountType === 'dola') {
+    accountMessage.value = api
+      ? '当前后台尚未加载 Dola 账号接口，请完全退出并重新启动客户端后再添加'
+      : '桌面接口尚未就绪，请从 Python 启动应用后再添加账号'
+    return
+  }
+  if (!supportsAccountTypes && typeof api?.create_account !== 'function') {
+    accountMessage.value = '桌面接口尚未就绪，请从 Python 启动应用后再添加账号'
+    return
+  }
+  creatingAccount.value = true
+  accountMessage.value = `正在添加 ${accountTypeLabel({ accountType })} 账号…`
   try {
-    const account = await window.pywebview.api.create_account(newAccountName.value)
+    const account = supportsAccountTypes
+      ? await api.create_generation_account(name, accountType)
+      : await api.create_account(name)
+    if (!account?.id) throw new Error('添加账号未返回有效结果，请重新启动客户端后重试')
+    const createdAccount = { ...account, accountType: account.accountType || 'doubao' }
+    accounts.value = [...accounts.value.filter(item => item.id !== account.id), createdAccount]
     newAccountName.value = ''
-    await loadAccounts()
     selectedAccountId.value = account.id
-    accountMessage.value = `已创建 ${account.name}`
+    accountMessage.value = `已创建 ${accountTypeLabel(createdAccount)} 账号 ${account.name}`
   } catch (err) {
-    error.value = cleanError(err)
+    accountMessage.value = cleanError(err)
+  } finally {
+    creatingAccount.value = false
   }
 }
 
 async function openSelectedAccount() {
+  if (openingAccountId.value || completingAccountId.value) return
   if (!selectedAccountId.value) {
     accountMessage.value = '请先创建并选择一个账号'
     return
   }
+  const accountId = selectedAccountId.value
+  openingAccountId.value = accountId
   try {
-    const result = await window.pywebview.api.open_account_login(selectedAccountId.value)
+    const result = await window.pywebview.api.open_account_login(accountId)
+    if (result.status === 'manual') {
+      accounts.value = accounts.value.map(account => account.id === accountId
+        ? { ...account, manualLoginPending: true, authenticated: false, status: 'Dola 登录待确认 · 请点击完成登录' }
+        : account)
+      delete accountVerifyState.value[accountId]
+    }
     accountMessage.value = result.message
   } catch (err) {
     accountMessage.value = cleanError(err)
+  } finally {
+    openingAccountId.value = ''
+  }
+}
+
+async function completeSelectedAccountLogin() {
+  if (completingAccountId.value || openingAccountId.value) return
+  const accountId = selectedAccountId.value
+  const account = accounts.value.find(item => item.id === accountId)
+  if (!account?.manualLoginPending || account.accountType !== 'dola') return
+  const api = apiReady()
+  if (typeof api?.complete_account_login !== 'function') {
+    accountMessage.value = '客户端后台尚未更新，请完全退出并重新启动客户端后再完成登录'
+    return
+  }
+  completingAccountId.value = accountId
+  accountVerifyingIds.value = new Set([...accountVerifyingIds.value, accountId])
+  accountMessage.value = `正在关闭 ${account.name} 的登录窗口并确认登录…`
+  try {
+    const result = await api.complete_account_login(accountId)
+    accounts.value = accounts.value.map(item => item.id === accountId
+      ? { ...item, manualLoginPending: false, authenticated: result.loggedIn, hasLoggedIn: item.hasLoggedIn || result.loggedIn }
+      : item)
+    accountVerifyState.value = { ...accountVerifyState.value, [accountId]: {
+      status: result.loggedIn ? 'ok' : account.hasLoggedIn ? 'expired' : 'failed', message: result.message, detail: result, at: Date.now(),
+    } }
+    accountMessage.value = result.message
+  } catch (err) {
+    accountMessage.value = cleanError(err)
+  } finally {
+    completingAccountId.value = ''
+    const remaining = new Set(accountVerifyingIds.value)
+    remaining.delete(accountId)
+    accountVerifyingIds.value = remaining
+    loadAccounts().catch(() => {})
   }
 }
 
@@ -660,6 +755,10 @@ function isBatchVerifying() {
 async function verifyAccountLogin(account) {
   const accountId = account.id
   if (isAccountVerifying(accountId) || isBatchVerifying()) return
+  if (account.manualLoginPending) {
+    accountMessage.value = '请先在 Dola 窗口中登录，再点击“完成登录”'
+    return
+  }
   if (typeof window.pywebview?.api?.check_account_login !== 'function') {
     accountMessage.value = '客户端后台尚未更新，请完全退出并重新启动客户端后再校验登录'
     return
@@ -1041,7 +1140,7 @@ onBeforeUnmount(() => {
       <div class="topbar-actions">
       <button class="account-switch" @click="openSettings('accounts')">
         <span class="account-avatar">{{ selectedAccount?.name?.slice(0, 1) || '+' }}</span>
-        <span>{{ selectedAccount?.name || '添加生成账号' }}</span>
+        <span>{{ selectedAccount ? `${selectedAccount.name} · ${accountTypeLabel(selectedAccount)}` : '添加生成账号' }}</span>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4" /></svg>
       </button>
       </div>
@@ -1072,7 +1171,7 @@ onBeforeUnmount(() => {
     <section id="home" class="hero">
       <p class="eyebrow">VIDEO GENERATION</p>
       <h1>视频任务</h1>
-      <p class="subtitle">上传参考画面，通过 OriginalDoubao 或 Seedance 生成视频。</p>
+      <p class="subtitle">上传参考画面，通过 OriginaDoubao、Dola 或 Seedance 生成视频。</p>
     </section>
 
     <section id="create" class="workspace section-anchor">
@@ -1156,13 +1255,6 @@ onBeforeUnmount(() => {
       :video-model="model"
     />
 
-    <ImageChatWorkspace
-      v-else-if="activeMenu === 'image'"
-      :token="authToken"
-      :api-base="appInfo?.apiBase"
-      :storage-base="appInfo?.storageBase"
-    />
-
     <template v-else-if="activeMenu === 'convert'">
       <section id="convert" class="hero link-convert-hero">
         <p class="eyebrow">VIDEO LINK CONVERTER</p>
@@ -1180,7 +1272,7 @@ onBeforeUnmount(() => {
             <span>视频链接</span>
             <div class="link-convert-input-shell">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 14.5 6 17a3.5 3.5 0 0 1-5-5l3.5-3.5a3.5 3.5 0 0 1 5 0"/><path d="m15.5 9.5 2.5-2.5a3.5 3.5 0 0 1 5 5l-3.5 3.5a3.5 3.5 0 0 1-5 0"/><path d="m8 16 8-8"/></svg>
-              <input v-model="conversionLink" type="url" autocomplete="off" placeholder="视频分享链接或抖音视频直链" @keyup.enter="convertOriginalDoubaoLink" />
+              <input v-model="conversionLink" type="url" autocomplete="off" placeholder="Doubao / Dola 分享链接或视频直链" @keyup.enter="convertOriginalDoubaoLink" />
               <button v-if="conversionLink" type="button" aria-label="清空链接" @click="conversionLink = ''; conversionError = ''">×</button>
             </div>
           </label>
@@ -1190,8 +1282,10 @@ onBeforeUnmount(() => {
             <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7.5 10.5 12 15l4.5-4.5"/><path d="M5 19h14"/></svg>
             {{ convertingLink ? '正在解析并下载…' : '转换无水印视频' }}
           </button>
-          <p class="link-convert-help">支持官方视频分享链接和 *.douyin.com 视频直链，结果将保存到视频输出目录。</p>
+          <p class="link-convert-help">支持 Doubao / Dola 官方分享链接和视频直链，请选择对应平台的已登录账号。结果将保存到视频输出目录。</p>
           <p v-if="conversionLink.trim() && !selectedAccountId" class="error-message">暂无可用生成账号，请先在设置中心添加并登录账号</p>
+          <p v-if="conversionAccountMismatch" class="error-message">此链接需要 {{ conversionPlatform === 'dola' ? 'Dola' : 'OriginaDoubao' }} 账号，请切换为对应类型的生成账号</p>
+          <p v-if="selectedAccount?.loginExpired" class="error-message">所选账号登录已过期，请重新登录后再试</p>
           <p v-if="conversionError && !conversionResult" class="error-message">{{ conversionError }}</p>
         </div>
 
@@ -1231,6 +1325,14 @@ onBeforeUnmount(() => {
       </footer>
     </template>
 
+    <KeepAlive v-else>
+      <ImageChatWorkspace
+        :token="authToken"
+        :api-base="appInfo?.apiBase"
+        :storage-base="appInfo?.storageBase"
+      />
+    </KeepAlive>
+
     <div v-if="showSettings" class="modal-backdrop settings-backdrop" @click.self="showSettings = false">
       <section class="account-modal settings-modal">
         <div class="modal-heading">
@@ -1259,7 +1361,7 @@ onBeforeUnmount(() => {
         <section class="account-control-bar">
           <div class="account-control-copy">
             <span class="account-control-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"/><path d="M4 5v14"/></svg></span>
-            <span><strong>每日生成额度</strong><small>为所有生成账号设定统一的每日可用次数</small></span>
+            <span><strong>每日生成额度</strong><small>账号默认次数：OriginaDoubao 3 次，Dola 4 次</small></span>
           </div>
           <div class="daily-quota-control" :class="{ saving: accountStateAction === 'daily-limit' }">
             <span class="quota-control-label"><small>单账号上限</small><strong>每日</strong></span>
@@ -1337,10 +1439,11 @@ onBeforeUnmount(() => {
                   </button>
                 </span>
               </span>
+              <span class="account-type-badge" :class="account.accountType || 'doubao'">{{ accountTypeLabel(account) }}</span>
               <small class="account-status-copy">{{ account.status }}</small>
               <span class="account-quota-summary" :class="{ exhausted: account.quotaExhaustedToday }">
-                <span class="quota-number"><strong>{{ accountQuotaRemaining(account) }}</strong><em>/ {{ dailyVideoQuota() }}</em></span>
-                <span class="quota-meta"><span>今日剩余</span><span class="quota-track"><i :style="{ width: `${(accountQuotaRemaining(account) / dailyVideoQuota()) * 100}%` }"></i></span></span>
+                <span class="quota-number"><strong>{{ accountQuotaRemaining(account) }}</strong><em>/ {{ dailyVideoQuota(account) }}</em></span>
+                <span class="quota-meta"><span>今日剩余</span><span class="quota-track"><i :style="{ width: `${(accountQuotaRemaining(account) / dailyVideoQuota(account)) * 100}%` }"></i></span></span>
               </span>
               <template v-if="verifyChip(account.id)">
                 <button
@@ -1378,11 +1481,16 @@ onBeforeUnmount(() => {
 
         <section class="account-footer-panel">
           <div class="new-account">
-            <input v-model="newAccountName" maxlength="30" aria-label="新账号名称" placeholder="输入账号名称，例如：主账号" @keyup.enter="createAccount" />
-            <button @click="createAccount"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>添加账号</button>
+            <select v-model="newAccountType" :disabled="creatingAccount" aria-label="新账号类型">
+              <option v-for="option in accountTypeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+            </select>
+            <input v-model="newAccountName" :disabled="creatingAccount" maxlength="30" aria-label="新账号名称" placeholder="输入账号名称，例如：主账号" @keyup.enter="createAccount" />
+            <button type="button" :disabled="creatingAccount" @click="createAccount"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>{{ creatingAccount ? '添加中…' : '添加账号' }}</button>
           </div>
+          <p v-if="accountMessage" class="account-message" role="status" aria-live="polite">{{ accountMessage }}</p>
           <div class="account-footer-actions">
-            <button class="login-button" :disabled="!selectedAccountId" @click="openSelectedAccount">{{ selectedAccount?.authenticated ? '打开所选账号' : '登录所选账号' }}</button>
+            <button v-if="selectedAccount?.accountType === 'dola' && selectedAccount?.manualLoginPending" class="login-button" type="button" :disabled="Boolean(completingAccountId) || selectedAccount?.loginCompleting" @click="completeSelectedAccountLogin">{{ completingAccountId || selectedAccount?.loginCompleting ? '正在确认登录…' : '完成登录' }}</button>
+            <button v-else class="login-button" :disabled="!selectedAccountId || Boolean(openingAccountId) || Boolean(completingAccountId)" @click="openSelectedAccount">{{ openingAccountId ? '正在打开…' : selectedAccount?.authenticated ? '打开所选账号' : '登录所选账号' }}</button>
             <div class="verify-login-row">
           <button class="verify-login-button" type="button" :disabled="isBatchVerifying() || !checkableAccounts.length" @click="verifyAllAccountsLogin">
             <span v-if="isBatchVerifying()" class="verify-button-spinner" aria-hidden="true"></span>
@@ -1391,6 +1499,7 @@ onBeforeUnmount(() => {
           <button v-if="isBatchVerifying()" class="verify-cancel-button" type="button" @click="cancelVerifyAll">取消</button>
             </div>
           </div>
+          <p v-if="selectedAccount?.accountType === 'dola'" class="account-message">在浏览器中登录后，返回这里点击“完成登录”。软件会关闭专用窗口并确认登录。</p>
         </section>
         <div v-if="accountVerifyBatch" class="account-verify-progress">
           <div class="account-verify-progress-bar">
@@ -1403,7 +1512,6 @@ onBeforeUnmount(() => {
             <span class="muted">{{ accountVerifyBatch.done }} / {{ accountVerifyBatch.total }}</span>
           </div>
         </div>
-        <p v-if="accountMessage" class="account-message">{{ accountMessage }}</p>
         </template>
 
         <ModelManagerPanel v-else-if="settingsTab === 'models'" :token="authToken" />

@@ -19,7 +19,9 @@ from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import sync_playwright
 
-from constants import ACCOUNTS_DIR, BUNDLED_CHROME, DATA_DIR, ORIGINAL_DOUBAO_URL
+from constants import ACCOUNTS_DIR, BUNDLED_CHROME, DATA_DIR
+from generation_accounts import account_platform, is_platform_url, normalize_account_type
+from dola_login import resolve_dola_browser
 
 if TYPE_CHECKING:
     from launcher import DesktopApi
@@ -96,6 +98,12 @@ class BaseAccountBrowserWorker:
     def __init__(self, api: "DesktopApi", account_id: str, visible: bool) -> None:
         self.api = api
         self.account_id = account_id
+        account = api._find_account(account_id)
+        self.account_type = normalize_account_type(account.get("accountType"))
+        platform = account_platform(account)
+        self.platform_label = platform["label"]
+        self.home_url = platform["url"]
+        self.platform_domain = platform["domain"]
         self.visible = visible
         self.commands: queue.Queue[dict[str, Any]] = queue.Queue()
         self.ready = threading.Event()
@@ -108,6 +116,12 @@ class BaseAccountBrowserWorker:
 
     def stop(self) -> None:
         self.commands.put({"type": "stop"})
+
+    def submit_check_login(self, reply: Any) -> None:
+        self.commands.put({"type": "check_login", "reply": reply})
+
+    def _is_platform_page(self, page: Any) -> bool:
+        return is_platform_url(page.url, self.platform_domain)
 
     # ------------------------------------------------------------------ 命令分发
     def _dispatch_command(self, page: Any, context: Any, command: dict[str, Any]) -> None:
@@ -127,8 +141,9 @@ class BaseAccountBrowserWorker:
         context = None
         try:
             playwright = sync_playwright().start()
-            if not BUNDLED_CHROME.is_file():
-                raise RuntimeError(f"内置浏览器不存在：{BUNDLED_CHROME}")
+            executable = resolve_dola_browser(profile_dir) if self.account_type == "dola" else BUNDLED_CHROME
+            if not executable.is_file():
+                raise RuntimeError(f"内置浏览器不存在：{executable}")
             # OriginalDoubao 风控会识别 headless 浏览器，headless 下登录会话不被认可，
             # 导致后台生成卡在"已提交到 OriginalDoubao"。因此始终使用真实（非 headless）
             # 浏览器：前台放副屏，后台无副屏时把窗口放到屏幕外，不影响用户。
@@ -137,15 +152,15 @@ class BaseAccountBrowserWorker:
                 chrome_args = ["--window-position=-32000,-32000"]
             context = playwright.chromium.launch_persistent_context(
                 user_data_dir=str(profile_dir),
-                executable_path=str(BUNDLED_CHROME),
+                executable_path=str(executable),
                 headless=False,
                 accept_downloads=True,
                 viewport={"width": 1280, "height": 820},
                 args=chrome_args,
             )
             page = context.pages[0] if context.pages else context.new_page()
-            if not page.url.startswith("https://www.doubao.com"):
-                page.goto(ORIGINAL_DOUBAO_URL, wait_until="domcontentloaded", timeout=60_000)
+            if not self._is_platform_page(page):
+                page.goto(self.home_url, wait_until="domcontentloaded", timeout=60_000)
             self._refresh_authentication(context)
             self.ready.set()
             last_auth_check = time.monotonic()
@@ -185,11 +200,15 @@ class BaseAccountBrowserWorker:
             # 只认 sessionid / sessionid_ss：sid_guard 等辅助 cookie 有效期长达一年，
             # 单独存在不能证明已登录，否则 sessionid 已过期的账号会被误判为已认证。
             login_cookie_names = {"sessionid", "sessionid_ss"}
-            cookies = context.cookies([ORIGINAL_DOUBAO_URL])
+            cookies = context.cookies([self.home_url])
             self.authenticated = any(
                 cookie.get("name") in login_cookie_names and str(cookie.get("value") or "").strip()
                 for cookie in cookies
             )
+            if self.account_type == "dola":
+                page = next((item for item in context.pages if self._is_platform_page(item)), None)
+                state = self._detect_login_state(page) if page is not None else None
+                self.authenticated = state == "avatar" if state else None
             # 同步 cookie 缓存到 JSON，供 launcher 后续 HTTP 探活复用（避免每次校验都开浏览器）
             try:
                 self.api._save_account_cookies_cache(self.account_id, cookies)
@@ -199,14 +218,15 @@ class BaseAccountBrowserWorker:
             self.authenticated = None
 
     def _detect_login_state(self, page: Any) -> str | None:
-        """读取页面当前登录状态：'login'=出现登录入口，'avatar'=右上角已登录头像，None=还没渲染出来。"""
+        """读取页面当前登录状态：'login'=出现登录入口，'avatar'=已登录用户入口，None=还没渲染出来。"""
         try:
             return page.evaluate(
                 """
-                () => {
+                isDola => {
                   const isVisible = el => {
                     const r = el.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0;
+                    const style = getComputedStyle(el);
+                    return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.visibility !== 'collapse';
                   };
                   // 登录入口：Semi 按钮（OriginalDoubao 用的是 Semi Design，登录按钮含
                   // class="semi-button..."/>），也兼容普通 button/a；短文案且以"登录"开头，
@@ -215,20 +235,26 @@ class BaseAccountBrowserWorker:
                   const loginFound = loginNodes.some(n => {
                     const t = (n.innerText || n.textContent || '').trim();
                     if (!t || t.length > 12) return false;
-                    if (!t.startsWith('登录')) return false;
+                    if (!/^(登录|log\s*in|sign\s*in)(\s|$)/i.test(t) && !t.startsWith('登录')) return false;
                     if (t.includes('退出') || t.includes('已登录') || t.includes('登录后')) return false;
                     return isVisible(n);
                   });
                   if (loginFound) return 'login';
+                  if (isDola) {
+                    // Dola 左下角头像没有 avatar 样式类；页面仅在有用户信息时渲染此入口。
+                    const userControls = document.querySelectorAll('[data-testid="chat_header_avatar_button"],[data-testid*="user-avatar"],[data-testid*="user-menu"],[aria-label*="Account" i],[aria-label*="Profile" i]');
+                    if (Array.from(userControls).some(isVisible)) return 'avatar';
+                  }
                   // 已登录标志：右上角（页面顶部 140px 内）的用户头像，避免匹配到内容区的推荐头像。
                   const avatars = Array.from(document.querySelectorAll('[class*="semi-avatar"],img[class*="avatar"],[class*="avatar"]'));
                   if (avatars.some(el => {
                     const r = el.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0 && r.top < 140;
+                    return r.width > 0 && r.height > 0 && (isDola ? r.left < 300 && (r.top < 140 || r.bottom > innerHeight - 140) : r.top < 140);
                   })) return 'avatar';
                   return null;
                 }
-                """
+                """,
+                self.account_type == "dola",
             )
         except Exception:
             return None
@@ -240,15 +266,16 @@ class BaseAccountBrowserWorker:
         在 2 秒后才出现，若此时就读取会误判成"正常"。因此改为轮询等待，最多
         10 秒，一旦出现登录入口（semi 按钮「登录」）或右上角头像立即判定。
         """
-        if not page.url.startswith("https://www.doubao.com"):
-            page.goto(ORIGINAL_DOUBAO_URL, wait_until="domcontentloaded", timeout=60_000)
+        if not self._is_platform_page(page):
+            page.goto(self.home_url, wait_until="domcontentloaded", timeout=60_000)
         deadline = time.monotonic() + 10
         state = self._detect_login_state(page)
         while state is None and time.monotonic() < deadline:
             page.wait_for_timeout(400)
             state = self._detect_login_state(page)
+        cookies = []
         try:
-            cookies = context.cookies([ORIGINAL_DOUBAO_URL])
+            cookies = context.cookies([self.home_url])
             # 只认 sessionid / sessionid_ss：sid_guard 等辅助 cookie 有效期长达一年，
             # 若把它们也算作凭证，sessionid 已过期的账号会被误判为「正常」。
             has_session = any(
@@ -266,8 +293,11 @@ class BaseAccountBrowserWorker:
             # 页面状态无法确认（如选择器失配 / 渲染超时）。此时不能仅凭「cookie 存在」
             # 就判为正常——过期的 sessionid 仍然存在于浏览器里。只有确认存在会话
             # cookie 且页面未出现登录入口时才保守判为已登录，否则判未登录。
+            if self.account_type == "dola":
+                raise RuntimeError("Dola 页面尚未确认登录状态，请打开账号窗口完成登录后重试")
             logged_in = has_session
         self.authenticated = logged_in
+        self.api._save_account_cookies_cache(self.account_id, cookies)
         return {
             "loggedIn": logged_in,
             "pageState": state or "unknown",
@@ -278,7 +308,7 @@ class BaseAccountBrowserWorker:
 
     # ------------------------------------------------------------ 通用页面动作
     def _new_conversation_ready(self, page: Any) -> bool:
-        welcome_pattern = re.compile(r"有什么我能帮你(?:的)?吗[？?]?\s*$")
+        welcome_pattern = re.compile(r"有什么我能帮你(?:的)?吗[？?]?\s*$|^\s*How can I (?:assist|help) you today\?\s*$", re.I)
         welcome_items = page.get_by_text(welcome_pattern)
         for index in range(min(welcome_items.count(), 12)):
             try:
@@ -296,11 +326,11 @@ class BaseAccountBrowserWorker:
             except Exception:
                 pass
 
-            exact_pattern = re.compile(r"^\s*新对话\s*$")
+            exact_pattern = re.compile(r"^\s*(?:新对话|New Chat)\s*$", re.I)
             candidates = (
                 page.get_by_role("button", name=exact_pattern),
                 page.get_by_text(exact_pattern),
-                page.locator('[aria-label*="新对话"], [title*="新对话"]'),
+                page.locator('[aria-label*="新对话"], [title*="新对话"], [aria-label*="New Chat" i], [title*="New Chat" i]'),
             )
             clicked = False
             for candidate_group in candidates:
@@ -324,7 +354,7 @@ class BaseAccountBrowserWorker:
             elif attempt < 2:
                 page.wait_for_timeout(2_000)
 
-        raise RuntimeError("新对话打开失败：已重试 3 轮，仍未识别到“有什么我能帮你的吗”")
+        raise RuntimeError(f"{self.platform_label} 新对话打开失败：已重试 3 轮，仍未识别到欢迎页")
 
     def _upload_image(self, page: Any, image_path: str) -> None:
         inputs = page.locator('input[type="file"]')
@@ -339,7 +369,7 @@ class BaseAccountBrowserWorker:
                 except Exception:
                     continue
 
-        upload_names = re.compile(r"上传图片|上传参考图|添加图片|选择图片|参考图")
+        upload_names = re.compile(r"上传图片|上传参考图|添加图片|选择图片|参考图|Upload (?:image|photo)|Add (?:image|photo)|Reference image", re.I)
         buttons = page.get_by_text(upload_names)
         for index in range(min(buttons.count(), 10)):
             button = buttons.nth(index)
@@ -404,7 +434,7 @@ class BaseAccountBrowserWorker:
             except Exception:
                 continue
 
-        upload_names = re.compile(r"上传音频|添加音频|上传文件|添加文件|选择文件")
+        upload_names = re.compile(r"上传音频|添加音频|上传文件|添加文件|选择文件|Upload (?:audio|file)|Add (?:audio|file)|Choose file", re.I)
         buttons = page.get_by_text(upload_names)
         for index in range(min(buttons.count(), 12)):
             button = buttons.nth(index)
@@ -443,6 +473,8 @@ class BaseAccountBrowserWorker:
             '[contenteditable="true"]:visible',
             'input[placeholder*="描述"]:visible',
             'input[placeholder*="输入"]:visible',
+            'input[placeholder*="message" i]:visible',
+            'input[placeholder*="describe" i]:visible',
         )
         for selector in selectors:
             controls = page.locator(selector)
@@ -456,7 +488,7 @@ class BaseAccountBrowserWorker:
         raise RuntimeError("没有找到提示词输入框")
 
     def _click_generate(self, page: Any) -> None:
-        exact_names = re.compile(r"^(开始生成|立即生成|生成视频|生成|发送)$")
+        exact_names = re.compile(r"^(开始生成|立即生成|生成视频|生成|发送|Generate(?: Video| Image)?|Send|Start generating)$", re.I)
         for _ in range(90):
             send_button = page.locator("#flow-end-msg-send")
             if send_button.count() > 0:
@@ -491,7 +523,7 @@ class BaseAccountBrowserWorker:
                         control.get_attribute("aria-label"),
                         control.get_attribute("title"),
                     )))
-                    if re.search(r"开始生成|立即生成|生成视频|^生成$|发送", label) and control.is_enabled():
+                    if re.search(r"开始生成|立即生成|生成视频|^生成$|发送|\b(?:Generate|Send)\b", label, re.I) and control.is_enabled():
                         control.click(timeout=5000)
                         return
                 except Exception:
@@ -603,8 +635,34 @@ class BaseAccountBrowserWorker:
             return ""
 
     # ------------------------------------------------------------- 弹窗 / 风控
+    @staticmethod
+    def _is_quota_exhausted_reason(reason: str) -> bool:
+        return any(hint in reason for hint in ("额度不足", "额度已用完", "免费次数已用完"))
+
+    def _has_visible_generation_confirmation_dialog(self, page: Any) -> bool:
+        dialogs = page.locator('[role="dialog"]:visible, .semi-modal:visible')
+        for index in range(dialogs.count()):
+            text = dialogs.nth(index).inner_text(timeout=1_000)
+            if re.search(r"生成|generate|generation", text, re.I) and re.search(r"确认|安全|confirm|authorization", text, re.I):
+                return True
+        return False
+
+    def _generation_confirmation_requested(self, page: Any) -> bool:
+        messages = page.locator('[data-message-author-role="assistant"], [data-testid*="assistant-message"], [class*="assistant-message"]')
+        if not messages.count():
+            return False
+        text = messages.last.inner_text(timeout=1_000)
+        text = re.sub(r"[*_`]+", "", text)
+        text = re.sub(r"\s+", " ", text)
+        return bool(re.search(
+            r"请回复.{0,40}确认.{0,20}生成"
+            r"|确认(?:之)?后\s*[，,：:]?\s*(?:我(?:们)?)?\s*(?:再|就|将|会|才)*\s*(?:开始)?\s*(?:为你)?\s*生成视频"
+            r"|please (?:reply|respond).{0,60}confirm.{0,30}(?:generate|generation)",
+            text, re.I,
+        ))
+
     def _visible_download_desktop_dialog(self, page: Any) -> Any | None:
-        pattern = re.compile(r"下载.{0,12}电脑版|电脑版.{0,12}下载")
+        pattern = re.compile(r"下载.{0,12}电脑版|电脑版.{0,12}下载|Download (?:the )?Desktop App", re.I)
         selectors = (
             '[role="dialog"]:visible',
             '.semi-modal:visible',
@@ -634,7 +692,7 @@ class BaseAccountBrowserWorker:
                     'button[aria-label*="关闭"], [role="button"][aria-label*="关闭"], '
                     'button[title*="关闭"], [role="button"][title*="关闭"]'
                 ),
-                dialog.get_by_role("button", name=re.compile(r"^(?:关闭|取消|暂不|以后再说|×|X)$", re.I)),
+                dialog.get_by_role("button", name=re.compile(r"^(?:关闭|取消|暂不|以后再说|Close|Cancel|Not now|Later|×|X)$", re.I)),
                 dialog.locator(
                     '[class*="close"]:visible, [class*="Close"]:visible, '
                     '[class*="xicon"]:visible, [class*="XIcon"]:visible'
@@ -792,6 +850,15 @@ class BaseAccountBrowserWorker:
         """Return a user-facing reason when OriginalDoubao rejects this generation."""
 
         text = self._page_and_frame_text(page)
+        if self.account_type == "dola":
+            if self._has_visible_verification_surface(page) or re.search(r"verify (?:that )?you are human|complete (?:the )?(?:captcha|verification)", text, re.I):
+                return "Dola 触发人工安全验证，请打开该账号完成人工验证后重试", True
+            if self._detect_login_state(page) == "login" or re.search(r"session (?:has )?expired|log in to (?:continue|generate)", text, re.I):
+                return "Dola 登录已过期，请重新登录后重试", False
+            if re.search(r"(?:daily|generation|video) (?:limit|quota).{0,30}(?:reached|exhausted)|(?:insufficient|not enough) credits|no credits (?:left|remaining)", text, re.I):
+                return "Dola 视频生成额度不足，请切换账号或恢复额度后重试", False
+            if re.search(r"generation failed|failed to generate", text, re.I):
+                return "Dola 生成失败，请检查页面提示后重试", False
         normalized = re.sub(r"\s+", "", text)
         if self._has_visible_verification_surface(page) or (
             "请选择所有符合上述描述的图片" in normalized

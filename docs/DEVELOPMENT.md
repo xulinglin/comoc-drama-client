@@ -83,12 +83,31 @@ cd ..
 以下测试使用临时数据库和本机模拟模型服务，不读取真实 API Key，也不消耗模型额度：
 
 ```powershell
-.venv\Scripts\python -m unittest scripts.test_migration_regressions scripts.test_image_generation -v
+.venv\Scripts\python -m unittest scripts.test_migration_regressions scripts.test_image_generation scripts.test_generation_accounts -v
 .venv\Scripts\python -m scripts.test_local_storage
 node --test scripts/test_chapter_save.mjs
+node --test scripts/test_account_creation.mjs
 ```
 
 前端测试需先安装 `frontend/` 的依赖。已检查的迁移问题与实测边界见 [迁移检查记录](MIGRATION_AUDIT.md)。
+
+账号中心支持 `doubao`（OriginaDoubao）与 `dola`（Dola）两种 `accountType`；历史账号缺少该字段时默认 OriginaDoubao。添加账号时选定平台，每个账号仍使用独立浏览器 profile。固定平台的自动分配在该平台内轮换，Dola 登录校验读取国际版页面；图片 / 视频生成共用流程匹配中英文控件。
+
+账号默认每日视频次数为 OriginaDoubao 3 次、Dola 4 次，分别读取 `dailyVideoQuota` 与 `dolaDailyVideoQuota`。旧 Dola 账号即使存有 `dailyQuota: 3`，也按 4 次计算。登录或重新登录不清空当天已用次数；新账号初始化、成功扣次、账号卡片、剩余次数和自动分配均使用对应平台次数。保留原有“单账号上限”控件及其 `dailyVideoQuota` 保存方式，选择 Dola 不切换或修改该控件；平台差异只体现在账号次数和分配逻辑中。`scripts.test_generation_accounts` 与 `scripts/test_account_quotas.mjs` 覆盖第四次可用、第五次拦截、次数保留及控件保持不变。
+
+Dola 的生成确认若同时提示“今日剩余 0 个视频生成额度”（或英文当天剩余 0 视频额度），本次任务继续等待视频，不立即标记额度用完。视频返回后，保存 `quotaExhaustedAfterGeneration`；下载 / 上传流程进入终态时，先完成成功扣次，再将账号今日剩余额度归零，最后释放账号，避免被自动分配再次选中。视频已生成但下载 / 上传失败也归零；尚未返回视频或已取消的任务不凭这条确认归零。普通成功计数及次日重置方式保持原逻辑，未扩展为按模型消耗量计费。
+
+链接转换接受两个平台的官方页面以及 `*.douyin.com` / `v*-*.dola.com` 视频直链，必须选择对应平台账号。直链读取 MP4 的 `vid:` 元数据；豆包继续通过 `/alice/resource/get_video_model` 获取 fplay 模型并解析无 logo 视频流。
+
+Dola 使用网页实际调用的 `/creativity/resource/get_without_watermark`，请求为 `vid: [video_id]`，Web aid 为 `495671`。若返回 `without_watermark: false`，读取 `/creativity/user_config/get`；账号不要求升级且去 AI 水印开关尚未开启时，通过 `/creativity/user_config/set` 设置 `config_type: 1`、`watermark_option.is_on: true` 并重试。成功后保留开启状态，失败时恢复原关闭状态。只接受官方明确返回 `without_watermark: true` 的 `download_video[video_id].download_url`，不把播放或预览地址当成原片。Dola 的 HTTP 请求使用对应浏览器的新鲜 Cookie、系统代理与 Dola Referer，不调用豆包国内解析接口。此流程已用真实 Dola 直链验证成功，下载的 1280×720、10.08 秒视频保留音轨，抽查多个时刻未见 Dola AI 水印。
+
+自动生成结果也优先走对应平台的原片解析；解析失败的链接转换报错，不把原带水印直链当作转换结果。自动生成仍保留有水印下载兜底并标记 `resultWatermarked`。仅改变 `lr` 参数不能保证去水印，未来原片获取仍受登录态、地区、账号功能与站点接口变化限制。
+
+`python -m unittest scripts.test_link_conversion` 和 `node --test scripts/test_link_conversion.mjs` 覆盖链接域名、账号匹配、MP4 ID、平台 Referer、原片选择及解析失败处理。
+
+`scripts.test_generation_accounts` 使用临时账号数据和本地网页夹具检查路由、登录、上传与提交，不访问真实 Dola 服务、不消耗账号额度。真实站点的模型可用性和页面布局仍需登录账号进行验证。
+
+视频工作台提供 Do 与 Seedance 卡片。Do 下可选择自动、OriginaDoubao、Dola，也支持批量切换；新分镜默认 Do 自动。自动模式提交 `generationEngine: do`、`accountType: auto`，随机分配两个平台内未占用且有额度的账号，排除未登录过和已知登录失效的账号，不受顶部账号平台限制。固定平台提交对应的 `accountType`，只在该平台分配；旧请求仍沿用所选账号平台，旧项目的固定平台选择保持不变。任务表的 `accountType` 始终保存实际账号类型。Dola 的中英文模型控件与独立比例/时长下拉框均有本地夹具覆盖；`node --test scripts/test_video_platforms.mjs` 检查工作台选择、提交和任务恢复。
 
 ## 常见启动问题
 
