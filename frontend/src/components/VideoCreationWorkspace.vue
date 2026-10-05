@@ -55,6 +55,7 @@ const audioPreviewPlaying = ref(false)
 const audioPreviewCurrent = ref(0)
 const audioPreviewDuration = ref(0)
 const videoProjects = ref([])
+const videoProjectKeyword = ref('')
 const availableProjects = ref([])
 const activeVideoProject = ref(null)
 const videoProjectCreateOpen = ref(false)
@@ -295,6 +296,9 @@ const storyboardColumnRef = ref(null)
 const storyboardCardRefs = new Map()
 let storyboardAnchorFrame = 0
 const pollTimers = new Map()
+// 后端任务表快照，用于悬浮窗展示（名称/ID/状态/进度）
+const activeTasks = ref([])
+let taskRefreshTimer = null
 let projectSaveTimer = null
 let hydratingProject = false
 
@@ -350,6 +354,7 @@ const displayedAssets = computed(() => assets.value.filter(asset => {
   return activeCategory.value === 'all' || asset.category === activeCategory.value
 }))
 
+// 悬浮窗已上移到全局（App.vue），这里只保留任务状态判断等业务逻辑。
 const projectSaveLabel = computed(() => {
   const status = projectSaveStatus.value
   if (status.startsWith('正在')) return '保存中…'
@@ -461,12 +466,35 @@ async function loadVideoProjects() {
   try {
     const result = await videoProjectRequest('GET', '/video-project/list')
     videoProjects.value = Array.isArray(result) ? result : []
+    await refreshTasks('')
   } catch (err) {
     projectError.value = cleanError(err)
   } finally {
     projectListLoading.value = false
   }
 }
+
+// 卡片上的“生成中 N”以实时任务表为准：按 projectId 统计未结束任务。
+const videoProjectCards = computed(() => {
+  const liveCounts = new Map()
+  activeTasks.value.forEach(task => {
+    if (!isActiveTask(task)) return
+    const projectId = String(task.projectId || '')
+    if (!projectId) return
+    liveCounts.set(projectId, (liveCounts.get(projectId) || 0) + 1)
+  })
+  return videoProjects.value.map(project => ({
+    ...project,
+    runningCount: liveCounts.get(String(project.id || '')) || 0,
+  }))
+})
+
+const filteredVideoProjectCards = computed(() => {
+  const keyword = videoProjectKeyword.value.trim().toLowerCase()
+  if (!keyword) return videoProjectCards.value
+  return videoProjectCards.value.filter(project => [project.name, project.description]
+    .some(field => String(field || '').toLowerCase().includes(keyword)))
+})
 
 async function loadAvailableProjects() {
   try {
@@ -500,23 +528,19 @@ async function createVideoProject() {
     projectError.value = '请输入任务名称'
     return
   }
-  if (!newProjectId.value) {
-    projectError.value = availableProjects.value.length ? '请选择要关联的项目' : '请先创建一个项目，再新建创作任务'
-    return
-  }
   projectCreating.value = true
   projectError.value = ''
   try {
     const project = await videoProjectRequest('POST', '/video-project', {
       name,
-      projectId: newProjectId.value,
+      projectId: newProjectId.value || '',
       description: newProjectDescription.value.trim(),
       assets: [],
       storyboards: [],
     })
     newProjectName.value = ''
     newProjectDescription.value = ''
-    newProjectId.value = availableProjects.value.length === 1 ? String(availableProjects.value[0].id || '') : ''
+    newProjectId.value = ''
     videoProjectCreateOpen.value = false
     await loadVideoProjects()
     await openVideoProject(project)
@@ -528,7 +552,9 @@ async function createVideoProject() {
 }
 
 function restoreAssetMedia(asset) {
+  // 资产的生成是同步请求，退出后无法续跑，重进即视为已结束
   const restored = { ...asset, generating: false, generationError: '' }
+  delete restored.generatingStartedAt
   const fileId = restored.fileId || restored.coverId
   if (!restored.cover && fileId) restored.cover = fileDownloadUrl(fileId)
   delete restored.path
@@ -541,6 +567,71 @@ function resolveAssetReference(asset) {
   return canonicalAssetsById.value.get(id)
     || canonicalAssetsById.value.get(id.toLowerCase())
     || asset
+}
+
+const ACTIVE_TASK_STATUSES = new Set(['queued', 'pending', 'preparing', 'opening', 'configuring', 'uploading', 'submitting', 'generating', 'processing', 'running', 'sharing', 'downloading', 'finalizing', 'returning_to_conversation', 'confirming_authorization', 'waiting_confirmation'])
+
+function isActiveTask(task) {
+  return ACTIVE_TASK_STATUSES.has(String(task?.status || '').toLowerCase())
+}
+
+async function refreshTasks(projectId = '') {
+  if (!window.pywebview?.api?.list_tasks) return []
+  try {
+    const tasks = await window.pywebview.api.list_tasks(String(projectId || ''))
+    activeTasks.value = Array.isArray(tasks) ? tasks : []
+  } catch (err) {
+    activeTasks.value = []
+  }
+  return activeTasks.value
+}
+
+// 进入任务时按后端任务表恢复：进行中的任务接上轮询并显示进度；
+// 已结束的任务由后端 _apply_task_result 回写业务数据，这里只需重新拉取详情。
+async function hydrateRunningTasks(detail) {
+  const projectId = String(detail?.id || activeVideoProject.value?.id || '')
+  const tasks = await refreshTasks(projectId)
+  const runningOwners = new Set(
+    tasks.filter(task => isActiveTask(task) && task.ownerType === 'videoShot')
+      .map(task => String(task.ownerId || '')),
+  )
+  storyboards.value.forEach(shot => {
+    const task = tasks.find(item => item.ownerType === 'videoShot' && String(item.ownerId || '') === String(shot.id || ''))
+    if (!task) return
+    if (isActiveTask(task)) {
+      const engine = String(task.generationEngine || '')
+      if (engine === 'seedance') {
+        // Seedance 轮询依赖分镜自带的 seedanceTaskId/seedanceModel，
+        // 不能用任务表 id 覆盖分镜的 taskId。
+        if (engine) shot.generationEngine = engine
+        shot.status = task.status || 'generating'
+        shot.statusText = task.statusText || '正在生成'
+        shot.progress = Number(task.progress || 0)
+        return
+      }
+      shot.taskId = String(task.id || '')
+      shot.status = task.status || 'generating'
+      shot.statusText = task.statusText || '正在生成'
+      shot.progress = Number(task.progress || 0)
+      shot.accountId = String(task.accountId || '')
+      return
+    }
+    if (task.status === 'failed') {
+      shot.status = 'failed'
+      shot.statusText = task.statusText || '生成失败'
+      shot.generationError = task.statusText || '生成失败'
+    }
+  })
+  // 启动轮询：仍在跑的分镜
+  storyboards.value
+    .filter(shot => runningOwners.has(String(shot.id || '')))
+    .forEach(shot => {
+      if (shot.generationEngine === 'seedance') {
+        if (shot.seedanceTaskId) pollSeedanceShot(shot)
+      } else if (shot.taskId) {
+        pollShot(shot)
+      }
+    })
 }
 
 async function openVideoProject(project) {
@@ -566,25 +657,16 @@ async function openVideoProject(project) {
           shot.sendPreview = false
           shot.playerExpanded = false
           shot.referencesExpanded = false
-          shot.taskId = ''
           shot.replacingVideo = false
           shot.videoReplaceError = ''
           if (shot.resultFileId) shot.resultUrl = fileDownloadUrl(shot.resultFileId)
           else if (!shot.resultUrl?.startsWith('http')) shot.resultUrl = ''
           shot.resultPath = ''
-          if (shot.generationEngine === 'seedance' && shot.seedanceTaskId && !shot.resultFileId && !shot.resultUrl) {
-            shot.taskId = String(shot.seedanceTaskId)
-            shot.status = 'generating'
-            shot.statusText = '正在恢复 Seedance 任务轮询'
-            shot.progress = Math.max(8, Number(shot.progress || 0))
-          }
-          if (!shot.resultFileId && !shot.resultUrl) {
-            if (!shot.taskId) {
-              shot.status = ''
-              shot.statusText = ''
-              shot.progress = 0
-            }
-          }
+          // 任务状态由后端任务表统一管理，恢复见下方 hydrateRunningTasks。
+          shot.taskId = ''
+          shot.status = ''
+          shot.statusText = ''
+          shot.progress = 0
           return shot
         })
       : [createStoryboard(1)]
@@ -596,9 +678,7 @@ async function openVideoProject(project) {
     await nextTick()
     scheduleVisibleStoryboardAnchorUpdate()
     hydratingProject = false
-    storyboards.value
-      .filter(shot => shot.generationEngine === 'seedance' && shot.seedanceTaskId && shot.taskId)
-      .forEach(shot => pollSeedanceShot(shot))
+    await hydrateRunningTasks(detail)
   } catch (err) {
     hydratingProject = false
     projectError.value = cleanError(err)
@@ -611,6 +691,9 @@ function persistedAsset(asset) {
   const saved = { ...asset }
   delete saved.path
   delete saved.uploading
+  // 生成中的资产记录 startedAt 时间戳，重进任务时据此恢复“正在生成”态
+  if (saved.generating) saved.generatingStartedAt = Number(saved.generatingStartedAt || Date.now())
+  else delete saved.generatingStartedAt
   delete saved.generating
   delete saved.generationError
   if (saved.fileId || saved.coverId) delete saved.cover
@@ -636,7 +719,12 @@ function projectPayload() {
       delete saved.videoDuration
       delete saved.videoMuted
       delete saved.referencesExpanded
+      // 任务状态由后端任务表统一管理（list_tasks 恢复），业务数据里不再落库
+      // taskId/status/progress，避免两套状态打架。
       delete saved.taskId
+      delete saved.status
+      delete saved.statusText
+      delete saved.progress
       delete saved.resultPath
       delete saved.downloadingVideo
       delete saved.replacingVideo
@@ -1015,28 +1103,78 @@ async function generateAsset(asset) {
     prompt = referenceEditPrompt(asset, resolved, sourcePrompt)
   }
   asset.generating = true
+  asset.generatingStartedAt = Date.now()
+  await saveActiveVideoProject()
   await nextTick()
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
   try {
     if (resolvedReferences.length) editImages = await Promise.all(resolvedReferences.map(imageEditDataUrl))
-    const result = await window.pywebview.api.backend_request(
-      'POST',
-      isAudio ? '/ai/audio' : '/ai/image',
-      props.token,
-      isAudio
-        ? { prompt: DEFAULT_AUDIO_PROMPT, preview_text: DEFAULT_AUDIO_PROMPT }
-        : { model: selectedImageModel.value, prompt, ...(editImages.length ? { image: editImages } : {}), n: 1, size: '1024x1024' },
-    )
-    const rawUrl = result?.content || result?.url || result?.image_url || result?.audio_url || result?.data?.[0]?.url
-    if (!rawUrl) throw new Error(isAudio ? '音频生成没有返回可播放文件' : '图片生成没有返回图片')
-    asset.cover = absoluteMediaUrl(rawUrl)
-    asset.fileId = fileIdFromUrl(rawUrl)
-    if (isAudio) asset.duration = '已生成'
+    // 提交为后台任务：立即返回 taskId，生成在后台线程执行，
+    // 完成后由后端 _apply_task_result 回写到当前资产，切页面/切客户端都不会丢。
+    const body = isAudio
+      ? { prompt: DEFAULT_AUDIO_PROMPT, preview_text: DEFAULT_AUDIO_PROMPT }
+      : { model: selectedImageModel.value, prompt, ...(editImages.length ? { image: editImages } : {}), n: 1, size: '1024x1024' }
+    const submitted = await window.pywebview.api.start_asset_image_generation({
+      path: isAudio ? '/ai/audio' : '/ai/image',
+      body,
+      token: props.token,
+      ownerType: 'imageAsset',
+      ownerId: String(asset.id || ''),
+      projectId: String(activeVideoProject.value?.id || ''),
+      taskName: asset.name || (isAudio ? '资产音频' : '资产图片'),
+    })
+    asset.taskId = String(submitted?.taskId || '')
+    await saveActiveVideoProject()
+    refreshTasks(String(activeVideoProject.value?.id || ''))
+    // 返回的 Promise 在任务进入终态时 resolve：单点生成可忽略，批量生成需要
+    // await 它以保证"参考图→白模"这类依赖顺序。
+    return await pollAssetTask(asset)
   } catch (err) {
     asset.generationError = cleanError(err)
-  } finally {
     asset.generating = false
+    delete asset.generatingStartedAt
+    await saveActiveVideoProject()
   }
+}
+
+function pollAssetTask(asset) {
+  return new Promise(resolve => {
+    const tick = async () => {
+      try {
+        const latest = await window.pywebview.api.get_task(asset.taskId)
+        if (latest && latest.status === 'succeeded') {
+          const rawUrl = String(latest.resultUrl || '')
+          asset.cover = absoluteMediaUrl(rawUrl)
+          asset.fileId = String(latest.resultFileId || fileIdFromUrl(rawUrl) || '')
+          if (asset.category === 'audio') asset.duration = '已生成'
+          asset.generationError = ''
+          asset.generating = false
+          delete asset.generatingStartedAt
+          await saveActiveVideoProject()
+          refreshTasks(String(activeVideoProject.value?.id || ''))
+          resolve()
+          return
+        }
+        if (latest && ['failed', 'cancelled', 'canceled'].includes(latest.status)) {
+          asset.generationError = latest.statusText || '生成失败'
+          asset.generating = false
+          delete asset.generatingStartedAt
+          await saveActiveVideoProject()
+          refreshTasks(String(activeVideoProject.value?.id || ''))
+          resolve()
+          return
+        }
+        pollTimers.set(`asset:${asset.id}`, window.setTimeout(tick, 1200))
+      } catch (err) {
+        asset.generationError = cleanError(err)
+        asset.generating = false
+        delete asset.generatingStartedAt
+        await saveActiveVideoProject()
+        resolve()
+      }
+    }
+    tick()
+  })
 }
 
 function showAssetActions() {
@@ -1969,13 +2107,15 @@ async function pollShot(shot) {
       shot.resultWatermarked = Boolean(latest.resultWatermarked)
       if (latest.status === 'failed') shot.generationError = latest.statusText || '生成失败'
     }
-    if (latest && ['succeeded', 'failed'].includes(latest.status)) {
+    if (latest && ['succeeded', 'failed', 'cancelled', 'canceled'].includes(latest.status)) {
       if (latest.status === 'succeeded' && shot.resultFileId) {
         shot.statusText = latest.statusText || (shot.resultWatermarked
           ? '无水印解析失败，已将有水印视频保存到当前任务'
           : '视频已生成并保存到当前任务')
         await saveActiveVideoProject()
       } else if (latest.status === 'succeeded' && shot.resultPath) {
+        // 兜底：worker 已生成但未入库时，由前端补一次上传。
+        // 后端 _apply_task_result 会随后把结果回写到业务数据。
         shot.statusText = '视频生成完成，正在上传入库'
         try {
           const uploaded = await window.pywebview.api.upload_local_file(props.token, shot.resultPath)
@@ -1989,6 +2129,7 @@ async function pollShot(shot) {
         }
       }
       stopPolling(shot.id)
+      refreshTasks(String(activeVideoProject.value?.id || ''))
       return
     }
     const timer = window.setTimeout(() => pollShot(shot), 700)
@@ -1997,6 +2138,7 @@ async function pollShot(shot) {
     shot.generationError = cleanError(err)
     shot.status = 'failed'
     stopPolling(shot.id)
+    await saveActiveVideoProject()
   }
 }
 
@@ -2239,13 +2381,20 @@ async function generateShot(shot) {
       autoAssignAccount: true,
       token: props.token,
       persistResult: true,
+      ownerType: 'videoShot',
+      ownerId: String(shot.id || ''),
+      projectId: String(activeVideoProject.value?.id || ''),
+      taskName: `分镜 ${storyboards.value.indexOf(shot) + 1} 视频`,
+      generationEngine: String(shot.generationEngine || ''),
     })
     shot.taskId = result.taskId
     shot.accountId = String(result.accountId || props.selectedAccountId || '')
+    await saveActiveVideoProject()
     await pollShot(shot)
   } catch (err) {
     shot.status = 'failed'
     shot.generationError = cleanError(err)
+    await saveActiveVideoProject()
   }
 }
 
@@ -2285,6 +2434,8 @@ onMounted(() => {
   loadGenerators()
   loadVideoProjects()
   loadAvailableProjects()
+  // 定时刷新任务表，驱动"生成中 N"计数
+  taskRefreshTimer = window.setInterval(() => refreshTasks(String(activeVideoProject.value?.id || '')), 2000)
   document.addEventListener('click', closeAllPopovers)
   document.addEventListener('keydown', handlePopoverKeydown)
   document.addEventListener('fullscreenchange', syncPlayerFullscreenState)
@@ -2292,6 +2443,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   pollTimers.forEach(timer => window.clearTimeout(timer))
+  if (taskRefreshTimer) window.clearInterval(taskRefreshTimer)
   if (storyboardAnchorFrame) window.cancelAnimationFrame(storyboardAnchorFrame)
   if (projectSaveTimer) window.clearTimeout(projectSaveTimer)
   if (activeVideoProject.value?.id) saveActiveVideoProject()
@@ -2307,7 +2459,13 @@ onBeforeUnmount(() => {
     <header class="video-project-workspace-head">
       <div class="video-project-head-copy"><span>VIDEO GENERATION WORKSPACE</span><div><h1>视频创作任务</h1><b>{{ videoProjects.length }} 个任务</b></div><p>管理资产、连续分镜与视频生成进度。</p></div>
       <div class="video-project-head-art" aria-hidden="true"><span class="video-project-hero-script"><i></i><i></i><i></i></span><span class="video-project-hero-shot video-project-hero-shot-top"></span><span class="video-project-hero-shot video-project-hero-shot-bottom"></span><svg viewBox="0 0 250 130"><path d="M90 65 C125 65 122 32 164 32M90 68 C125 68 122 98 164 98"/></svg></div>
-      <button class="video-project-new-button" type="button" @click="videoProjectCreateOpen = true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>新建任务</button>
+      <div class="video-project-head-actions">
+        <label class="video-project-search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></svg>
+          <input v-model="videoProjectKeyword" type="search" placeholder="搜索任务" aria-label="搜索任务" />
+        </label>
+        <button class="video-project-new-button" type="button" @click="videoProjectCreateOpen = true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>新建任务</button>
+      </div>
     </header>
     <div v-if="projectDetailLoading" class="video-project-detail-overlay" role="status" aria-live="polite">
       <BaseLoadingState size="lg" panel text="正在打开任务…" description="加载资产与分镜数据" />
@@ -2327,8 +2485,8 @@ onBeforeUnmount(() => {
         </article>
       </div>
       <div v-else-if="videoProjects.length" class="video-project-grid">
-        <article class="video-project-create-card"><button type="button" @click="videoProjectCreateOpen = true"><span class="video-project-new-visual" aria-hidden="true"><span class="video-project-new-script"><i></i><i></i><i></i></span><span class="video-project-new-frame"><i></i><b></b></span><span class="video-project-new-plus"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span></span><strong>开始创作</strong></button><div><svg viewBox="0 0 18 18"><path d="M3 6.5v5M6 4.5v9M9 7v4M12 5.5v7M15 3.5v11"/></svg><span>doubao Studio</span></div></article>
-        <article v-for="project in videoProjects" :key="project.id" class="video-project-card" tabindex="0" @click="openVideoProject(project)" @keydown.enter.self="openVideoProject(project)">
+        <article v-if="!videoProjectKeyword.trim()" class="video-project-create-card"><button type="button" @click="videoProjectCreateOpen = true"><span class="video-project-new-visual" aria-hidden="true"><span class="video-project-new-script"><i></i><i></i><i></i></span><span class="video-project-new-frame"><i></i><b></b></span><span class="video-project-new-plus"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span></span><strong>开始创作</strong></button><div><svg viewBox="0 0 18 18"><path d="M3 6.5v5M6 4.5v9M9 7v4M12 5.5v7M15 3.5v11"/></svg><span>doubao Studio</span></div></article>
+        <article v-for="project in filteredVideoProjectCards" :key="project.id" class="video-project-card" tabindex="0" @click="openVideoProject(project)" @keydown.enter.self="openVideoProject(project)">
           <div class="video-project-card-body">
             <header><span>CREATION TASK</span><span class="video-project-card-head-actions"><button class="video-project-delete-button" type="button" :disabled="Boolean(deletingProjectId)" :aria-label="`删除任务 ${project.name || '未命名任务'}`" data-tooltip="删除任务" @click.stop="requestDeleteVideoProject(project)" @keydown.stop><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg></button><svg class="video-project-open-arrow" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10h10m-4-4 4 4-4 4"/></svg></span></header>
             <h2>{{ project.name || '未命名任务' }}</h2>
@@ -2338,6 +2496,7 @@ onBeforeUnmount(() => {
               <div class="stat-pills">
                 <span class="stat-pill stat-pill-asset"><i class="stat-dot"></i><b>{{ project.assetCount || 0 }}</b><small>资产</small></span>
                 <span class="stat-pill stat-pill-shot"><i class="stat-dot"></i><b>{{ project.storyboardCount || 0 }}</b><small>分镜</small></span>
+                <span v-if="project.runningCount" class="stat-pill stat-pill-running"><i class="stat-dot"></i><b>{{ project.runningCount }}</b><small>生成中</small></span>
               </div>
               <button type="button" class="video-project-finished-stat" :aria-label="`查看 ${project.name || '任务'} 的 ${project.completedCount || 0} 个成片`" @click.stop="openProjectFinishedPreview(project)" @keydown.stop>
                 <i class="video-project-finished-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5z"/></svg></i>
@@ -2349,17 +2508,17 @@ onBeforeUnmount(() => {
           </div>
         </article>
       </div>
+      <div v-else-if="videoProjectKeyword.trim()" class="video-project-empty"><strong>没有匹配的任务</strong><span>试试其他关键词，或清空搜索重新查看全部任务。</span></div>
       <div v-else class="video-project-empty"><strong>还没有创作任务</strong><span>点击“新建任务”，开始你的第一个故事。</span></div>
     </section>
     <div v-if="videoProjectCreateOpen" class="video-project-create-backdrop" @click.self="videoProjectCreateOpen = false">
       <form class="video-project-create" @submit.prevent="createVideoProject">
         <div class="video-project-create-head"><span>＋</span><div><strong>新建创作任务</strong><small>创建后可导入完整 JSON 资产与分镜</small></div><button type="button" aria-label="关闭" @click="videoProjectCreateOpen = false">×</button></div>
         <label><span>任务名称</span><input v-model="newProjectName" placeholder="例如：末日 Online" maxlength="256" autocomplete="off" /></label>
-        <label class="video-project-link-field"><span>关联项目 <small>必选 · 资产将自动归入该项目</small></span><UiSelect v-model="newProjectId" :options="projectLinkOptions" :placeholder="availableProjects.length ? '选择一个项目' : '暂无项目，请先创建项目'" :disabled="!availableProjects.length" badge="PROJECT" /></label>
+        <label class="video-project-link-field"><span>关联项目 <small>选填 · 可稍后在工作台绑定</small></span><UiSelect v-model="newProjectId" :options="projectLinkOptions" :placeholder="availableProjects.length ? '不关联项目' : '暂无项目'" badge="PROJECT" /></label>
         <label><span>任务描述 <small>选填</small></span><textarea v-model="newProjectDescription" placeholder="简单描述故事主题或创作方向" maxlength="512" rows="3"></textarea></label>
         <p v-if="projectError" class="video-project-form-error">{{ projectError }}</p>
-        <p v-if="!availableProjects.length" class="video-project-link-empty">创作任务需要归属一个项目。请先在项目页创建项目，再返回这里继续。</p>
-        <footer><button type="button" @click="videoProjectCreateOpen = false">取消</button><button type="submit" :disabled="projectCreating || !availableProjects.length">{{ projectCreating ? '正在创建…' : '创建并进入工作台' }}</button></footer>
+        <footer><button type="button" @click="videoProjectCreateOpen = false">取消</button><button type="submit" :disabled="projectCreating">{{ projectCreating ? '正在创建…' : '创建并进入工作台' }}</button></footer>
       </form>
     </div>
     <div v-if="projectToDelete" class="video-project-create-backdrop" @click.self="cancelDeleteVideoProject">
@@ -2966,13 +3125,19 @@ onBeforeUnmount(() => {
 .video-project-hub { padding-top: 28px; }
 .video-project-workspace-head { position: relative; display: flex; min-height: 176px; box-sizing: border-box; align-items: center; justify-content: space-between; gap: 38px; overflow: hidden; padding: 30px clamp(26px,4vw,50px); border: 1px solid #333; border-radius: 22px; background: #191919; box-shadow: 0 22px 60px #00000024; }
 .video-project-workspace-head::before { position: absolute; inset: 0; opacity: .32; background-image: radial-gradient(circle,#454545 1px,transparent 1px); background-size: 18px 18px; content: ''; mask-image: linear-gradient(90deg,transparent 22%,#000 54%,transparent 92%); }
-.video-project-head-copy,.video-project-new-button { position: relative; z-index: 3; }
+.video-project-head-copy,.video-project-head-actions { position: relative; z-index: 3; }
 .video-project-head-copy { min-width: 300px; }
 .video-project-head-copy > span { color: #2eddff; font: 800 12px/1 monospace; letter-spacing: .18em; }
 .video-project-head-copy > div { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
 .video-project-head-copy h1 { margin: 0; color: #f3f3f3; font-size: 30px; letter-spacing: -.04em; }
 .video-project-head-copy b { padding: 3px 8px; border: 1px solid #3b3b3b; border-radius: 99px; color: #999; font-size: 12px; }
 .video-project-head-copy p { margin: 13px 0 0; color: #a6a6a6; font-size: 13px; line-height: 1.55; }
+.video-project-head-actions { display: flex; align-items: center; gap: 10px; padding: 7px; border: 1px solid #393939; border-radius: 14px; background: #222222e6; box-shadow: 0 12px 30px #0003; backdrop-filter: blur(12px); }
+.video-project-search { display: flex; width: clamp(190px,20vw,280px); height: 40px; align-items: center; gap: 10px; padding: 0 14px; border: 1px solid #3b3b3b; border-radius: 22px; background: #1a1a1a; }
+.video-project-search:focus-within { border-color: #5c5c5c; }
+.video-project-search svg { width: 17px; flex: 0 0 auto; fill: none; stroke: #787878; stroke-width: 1.7; }
+.video-project-search input { min-width: 0; flex: 1; border: 0; outline: 0; color: #eee; background: transparent; font-size: 14px; }
+.video-project-search input::placeholder { color: #929292; opacity: 1; }
 .video-project-new-button { display: inline-flex; height: 40px; align-items: center; gap: 7px; padding: 0 14px; border: 1px solid #494949; border-radius: 10px; color: #fff; background: #252525; cursor: pointer; font-size: 13px; font-weight: 700; }
 .video-project-new-button:hover,.video-project-new-button:focus-visible { border-color: #45d7ff; outline: 0; background: #2b2b2b; }
 .video-project-new-button svg { width: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
@@ -3115,7 +3280,7 @@ onBeforeUnmount(() => {
 
 @media (max-width: 1450px) { .video-project-grid { grid-template-columns: repeat(3,minmax(0,1fr)); } }
 @media (max-width: 1180px) { .video-project-head-art { display: none; }.video-project-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
-@media (max-width: 900px) { .video-project-workspace-head { align-items: flex-start; flex-direction: column; gap: 22px; }.video-project-new-button { width: 100%; justify-content: center; }.video-project-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 900px) { .video-project-workspace-head { align-items: flex-start; flex-direction: column; gap: 22px; }.video-project-head-actions { width: 100%; }.video-project-search { width: auto; flex: 1; }.video-project-new-button { justify-content: center; }.video-project-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media (max-width: 1280px) {
   .video-workbench-layout { grid-template-columns: 260px minmax(0,1fr); }
   .asset-rail-grid { grid-template-columns: 1fr; }
@@ -3161,6 +3326,7 @@ onBeforeUnmount(() => {
 .stat-pill { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 7px; border-radius: 6px; background: #232323; transition: background .18s ease; flex: 0 0 auto; }
 .stat-pill-asset { --stat-rgb: 69,215,255; }
 .stat-pill-shot { --stat-rgb: 184,167,255; }
+.stat-pill-running { --stat-rgb: 90,224,138; }
 .stat-pill:hover { background: #2a2a2a; }
 .stat-dot { width: 5px; height: 5px; border-radius: 50%; background: rgba(var(--stat-rgb),.95); box-shadow: 0 0 5px rgba(var(--stat-rgb),.4); flex: 0 0 auto; }
 .stat-pill b { color: #f0f0f0; font-size: 12px; font-weight: 700; line-height: 1; }

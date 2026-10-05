@@ -158,6 +158,7 @@ from constants import (
     BUNDLED_JAVA,
     CREDENTIALS_FILE,
     DATA_DIR,
+    GENERATION_TASKS_FILE,
     ORIGINAL_DOUBAO_URL,
     FRONTEND_DIST,
     OUTPUT_DIR,
@@ -167,7 +168,7 @@ from constants import (
     STORAGE_DIR,
     STORAGE_SERVICE_JAR,
 )
-from original_doubao_worker import AccountBrowserWorker
+from original_doubao_worker import AccountBrowserWorker, OriginalDoubaoImageWorker
 from original_doubao_nomark import is_supported_conversion_url
 from media_server import MediaPreviewServer
 
@@ -209,7 +210,10 @@ class DesktopApi:
         self._window: webview.Window | None = None
         self._tasks: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
-        self._workers: dict[str, AccountBrowserWorker] = {}
+        # 任务表持久化：客户端重启后仍能查到历史/进行中的任务，
+        # 前端据此恢复进度并回显结果。加载逻辑见 _load_generation_tasks。
+        self._load_generation_tasks()
+        self._workers: dict[str, Any] = {}
         self._account_usage: dict[str, dict[str, Any]] = {}
         # 校验登录得到的"会话已过期"标记。会随账号数据持久化到 loginExpiredAt 字段，
         # 客户端重启后由 _restore_login_expired_flags 还原，避免过期账号被误用。
@@ -703,6 +707,46 @@ class DesktopApi:
         cache_dir.mkdir(parents=True, exist_ok=True)
         target = cache_dir / f"asset_{re.sub(r'[^a-zA-Z0-9_-]', '_', file_id)}{suffix}"
         target.write_bytes(response.content)
+        return {"path": str(target.resolve())}
+
+    def save_image_data_url(self, data_url: str, file_name: str = "") -> dict[str, str]:
+        """Persist a browser-provided data URL (or http URL) to a local file.
+
+        豆包图片生成页用它把用户选择的参考图落成本地文件，交给浏览器自动化上传。
+        """
+        import base64
+
+        raw = str(data_url or "").strip()
+        if not raw:
+            raise ValueError("参考图片为空")
+        suffix = Path(file_name).suffix.lower() if file_name else ""
+        if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+            suffix = ".png"
+        cache_dir = DATA_DIR / "generation_inputs"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        marker = ";base64,"
+        if raw.startswith("data:") and marker in raw:
+            header, encoded = raw.split(marker, 1)
+            content_type = header[5:].split(";", 1)[0].strip().lower()
+            guessed = mimetypes.guess_extension(content_type) if content_type else ""
+            if guessed == ".jpe":
+                guessed = ".jpg"
+            if guessed and not (file_name or "").strip():
+                suffix = guessed
+            target = cache_dir / f"upload_{uuid.uuid4().hex[:10]}{suffix}"
+            target.write_bytes(base64.b64decode(encoded))
+        elif raw.startswith(("http://", "https://")):
+            target = cache_dir / f"upload_{uuid.uuid4().hex[:10]}{suffix}"
+            response = httpx.get(raw, timeout=60, follow_redirects=True)
+            response.raise_for_status()
+            target.write_bytes(response.content)
+        elif Path(raw).is_file():
+            source = Path(raw)
+            suffix = source.suffix.lower() or suffix
+            target = cache_dir / f"upload_{uuid.uuid4().hex[:10]}{suffix}"
+            shutil.copy2(source, target)
+        else:
+            raise ValueError("不支持的参考图片格式")
         return {"path": str(target.resolve())}
 
     def select_json_data(self) -> dict[str, Any] | None:
@@ -1293,9 +1337,67 @@ class DesktopApi:
             if not ownership_transferred:
                 kernel32.GlobalFree(handle)
 
+    # ---------- 生成任务表持久化 ----------
+
+    def _load_generation_tasks(self) -> None:
+        try:
+            if not GENERATION_TASKS_FILE.is_file():
+                return
+            raw = json.loads(GENERATION_TASKS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        items = raw.get("tasks") if isinstance(raw, dict) else raw
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            task_id = str(item.get("id") or "").strip()
+            if not task_id:
+                continue
+            # 重启后没有 worker 线程驱动这些任务，把非终态任务标记为中断，
+            # 避免前端永远显示"进行中"。
+            if item.get("status") not in {"succeeded", "failed", "cancelled", "canceled"}:
+                item["status"] = "failed"
+                item["statusText"] = "客户端重启导致任务中断，请重新生成"
+                item["progress"] = 0
+            self._tasks[task_id] = item
+
+    def _persist_tasks_locked(self) -> None:
+        """写入任务表快照。调用方必须已持有 self._lock。"""
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            # 只落库体积可控的字段，避免把大体积二进制/base64 写盘。
+            snapshot: list[dict[str, Any]] = []
+            for task in self._tasks.values():
+                snapshot.append({
+                    key: value
+                    for key, value in task.items()
+                    if key not in {"uploads", "attachments", "_runtime"}
+                })
+            GENERATION_TASKS_FILE.write_text(
+                json.dumps({"version": 1, "tasks": snapshot}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _persist_tasks(self) -> None:
+        with self._lock:
+            self._persist_tasks_locked()
+
+    def list_tasks(self, project_id: str = "") -> list[dict[str, Any]]:
+        """返回任务列表，可按项目过滤。前端据此恢复进度与回显结果。"""
+        wanted_project = str(project_id or "").strip()
+        with self._lock:
+            tasks = [dict(task) for task in self._tasks.values()]
+        if wanted_project:
+            tasks = [task for task in tasks if str(task.get("projectId") or "") == wanted_project]
+        tasks.sort(key=lambda task: float(task.get("createdAt") or 0), reverse=True)
+        return _stringify_id_fields(tasks)
+
     def start_generation(self, payload: dict[str, Any]) -> dict[str, str]:
         raw_attachments = payload.get("attachments")
-        attachments: list[dict[str, Any]] = []
         if isinstance(raw_attachments, list):
             for item in raw_attachments:
                 if not isinstance(item, dict) or not str(item.get("path", "")).strip():
@@ -1387,7 +1489,14 @@ class DesktopApi:
                 "conversationId": "",
                 "conversationUrl": "",
                 "generationSubmittedAt": 0,
+                "createdAt": time.time(),
+                "ownerType": str(payload.get("ownerType") or ""),
+                "ownerId": str(payload.get("ownerId") or ""),
+                "projectId": str(payload.get("projectId") or ""),
+                "taskName": str(payload.get("taskName") or ""),
+                "generationEngine": str(payload.get("generationEngine") or ""),
             }
+            self._persist_tasks_locked()
 
         # 豆包风控不认可隐藏窗口，自动化始终使用可见浏览器窗口。
         desired_visible = True
@@ -1430,6 +1539,210 @@ class DesktopApi:
         with self._lock:
             task = self._tasks.get(task_id)
             return dict(task) if task else None
+
+    def cancel_task(self, task_id: str) -> dict[str, Any]:
+        """手动取消一个进行中的任务。
+
+        标记 cancelled 后忽略 worker 的后续回写，并释放其占用的账号；
+        浏览器中已提交的远端任务可能仍会继续，但不再影响本地任务状态。
+        """
+        clean_task_id = str(task_id or "").strip()
+        account_id = ""
+        with self._lock:
+            task = self._tasks.get(clean_task_id)
+            if task is None:
+                return {"id": clean_task_id, "cancelled": False}
+            if task.get("status") in {"succeeded", "failed", "cancelled", "canceled"}:
+                return {"id": clean_task_id, "cancelled": False}
+            account_id = str(task.get("accountId") or "")
+            task.update({
+                "status": "cancelled",
+                "statusText": "已手动取消；远端可能仍在生成",
+                "progress": 0,
+                "cancelled": True,
+                "finishedAt": time.time(),
+            })
+            self._persist_tasks_locked()
+        if account_id:
+            self._release_account_usage(account_id, clean_task_id)
+        return {"id": clean_task_id, "cancelled": True}
+
+    def start_image_generation(self, payload: dict[str, Any]) -> dict[str, str]:
+        """Create a 豆包 web-automation image generation task.
+
+        与视频生成共用账号池与浏览器 worker：豆包账号来自账号管理，不需要在
+        图片模型里单独配置。区别只在 worker 侧走图片生成入口。
+        """
+        attachments: list[dict[str, str]] = []
+        raw_image_paths = payload.get("imagePaths")
+        if not isinstance(raw_image_paths, list):
+            raw_image_paths = []
+        if not raw_image_paths and payload.get("imagePath"):
+            raw_image_paths = [payload.get("imagePath")]
+        staging_dir = DATA_DIR / "generation_inputs" / uuid.uuid4().hex[:10]
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        photo_index = 0
+        for raw_path in raw_image_paths:
+            source = Path(str(raw_path))
+            if not source.is_file():
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                raise ValueError(f"参考图片不存在：{source.name or source}")
+            photo_index += 1
+            target_path = staging_dir / f"fig{photo_index}{(source.suffix or '.png').lower()}"
+            shutil.copy2(source, target_path)
+            attachments.append({"path": str(target_path.resolve()), "type": "image"})
+
+        prompt = str(payload.get("prompt", "")).strip()
+        preferred_account_id = str(payload.get("accountId") or self.get_settings()["defaultAccountId"])
+        auto_assign_account = bool(payload.get("autoAssignAccount", True))
+        if not prompt:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            raise ValueError("请输入图片描述")
+        if not auto_assign_account:
+            if not preferred_account_id:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                raise ValueError("请先在设置中选择生成账号")
+            self._find_account(preferred_account_id)
+            if getattr(self, "_login_expired", {}).get(preferred_account_id):
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                raise ValueError("该生成账号登录已过期，请重新登录后再试")
+
+        task_id = uuid.uuid4().hex[:10]
+        try:
+            if auto_assign_account:
+                account = self._acquire_available_generation_account(preferred_account_id, task_id)
+                account_id = str(account.get("id") or "")
+            else:
+                account_id = preferred_account_id
+                account = self._find_account(account_id)
+                self._acquire_account_usage(account_id, task_id, "generation")
+        except Exception:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            raise
+        with self._lock:
+            self._tasks[task_id] = {
+                "id": task_id,
+                "category": "image",
+                "status": "queued",
+                "statusText": "任务已创建",
+                "progress": 4,
+                "imageNames": [Path(item["path"]).name for item in attachments],
+                "prompt": prompt,
+                "model": str(payload.get("model") or "豆包图片生成"),
+                "createdAt": time.time(),
+                "ownerType": str(payload.get("ownerType") or ""),
+                "ownerId": str(payload.get("ownerId") or ""),
+                "projectId": str(payload.get("projectId") or ""),
+                "taskName": str(payload.get("taskName") or "豆包图片"),
+                "accountId": account_id,
+                "accountName": str(account.get("name") or account_id),
+                "demo": False,
+                "requiresManualVerification": False,
+                "resultWatermarked": False,
+                "conversationId": "",
+                "conversationUrl": "",
+                "generationSubmittedAt": 0,
+            }
+
+        # 豆包风控不认可隐藏窗口，自动化始终使用可见浏览器窗口。
+        desired_visible = True
+        with self._lock:
+            worker = self._workers.get(account_id)
+        if worker is not None and worker.visible != desired_visible:
+            worker.stop()
+            worker.thread.join(timeout=8)
+            worker = None
+        try:
+            worker = worker or self._ensure_worker(
+                account_id, visible=desired_visible, worker_cls=OriginalDoubaoImageWorker
+            )
+        except Exception as exc:
+            self._update_task(
+                task_id,
+                status="failed",
+                statusText=f"启动豆包浏览器失败：{exc}",
+                progress=0,
+            )
+            raise
+        if not worker.ready.wait(timeout=20):
+            self._update_task(task_id, status="failed", statusText="启动豆包浏览器超时", progress=0)
+            return {"taskId": task_id, "accountId": account_id}
+        if worker.start_error:
+            self._update_task(task_id, status="failed", statusText=f"启动豆包浏览器失败：{worker.start_error}", progress=0)
+            return {"taskId": task_id, "accountId": account_id}
+        worker.submit_image_generation(
+            task_id,
+            {
+                "attachments": attachments,
+                "prompt": prompt,
+                "model": str(payload.get("model") or "豆包图片生成"),
+                "token": str(payload.get("token") or ""),
+            },
+        )
+        return {"taskId": task_id, "accountId": account_id}
+
+    def get_image_task(self, task_id: str) -> dict[str, Any] | None:
+        return self.get_task(task_id)
+
+    def start_asset_image_generation(self, payload: dict[str, Any]) -> dict[str, str]:
+        """把分镜资产（图片/音频）的生成变成后台任务。
+
+        与视频任务共用同一张持久化任务表：提交即返回 taskId，真正的生成在
+        后台线程里执行，完成后由 _update_task 回写结果到对应资产。
+        """
+        project_id = str(payload.get("projectId") or "").strip()
+        owner_id = str(payload.get("ownerId") or "").strip()
+        body = payload.get("body") if isinstance(payload.get("body"), dict) else {}
+        path = str(payload.get("path") or "/ai/image").strip() or "/ai/image"
+        is_audio = path == "/ai/audio"
+        task_id = uuid.uuid4().hex[:10]
+        with self._lock:
+            self._tasks[task_id] = {
+                "id": task_id,
+                "category": "audio" if is_audio else "image",
+                "kind": "asset",
+                "status": "running",
+                "statusText": "音频生成中" if is_audio else "图片生成中",
+                "progress": 15,
+                "prompt": str(body.get("prompt") or ""),
+                "createdAt": time.time(),
+                "ownerType": "imageAsset",
+                "ownerId": owner_id,
+                "projectId": project_id,
+                "taskName": str(payload.get("taskName") or ("资产音频" if is_audio else "资产图片")),
+            }
+            self._persist_tasks_locked()
+        threading.Thread(
+            target=self._run_asset_image_task,
+            args=(task_id, path, body, str(payload.get("token") or "")),
+            daemon=True,
+        ).start()
+        return {"taskId": task_id, "accountId": ""}
+
+    def _run_asset_image_task(self, task_id: str, path: str, body: dict[str, Any], token: str) -> None:
+        try:
+            result = self.backend_request("POST", path, token, body)
+            raw_url = ""
+            if isinstance(result, dict):
+                raw_url = str(
+                    result.get("content") or result.get("url") or result.get("image_url")
+                    or result.get("audio_url") or ""
+                ).strip()
+                data = result.get("data")
+                if not raw_url and isinstance(data, list) and data and isinstance(data[0], dict):
+                    raw_url = str(data[0].get("url") or "").strip()
+            if not raw_url:
+                raise ValueError("音频生成没有返回可播放文件" if path == "/ai/audio" else "图片生成没有返回图片")
+            self._update_task(
+                task_id,
+                status="succeeded",
+                statusText="音频已生成" if path == "/ai/audio" else "图片已生成",
+                progress=100,
+                resultUrl=raw_url,
+                resultFileId=str(result.get("fileId") or "") if isinstance(result, dict) else "",
+            )
+        except Exception as exc:
+            self._update_task(task_id, status="failed", statusText=str(exc) or "生成失败", progress=0)
 
     def convert_original_doubao_link(self, link: str, account_id: str = "") -> dict[str, str]:
         clean_link = str(link).strip()
@@ -2498,11 +2811,16 @@ class DesktopApi:
         }
 
 
-    def _ensure_worker(self, account_id: str, visible: bool) -> AccountBrowserWorker:
+    def _ensure_worker(
+        self,
+        account_id: str,
+        visible: bool,
+        worker_cls: type[AccountBrowserWorker] = AccountBrowserWorker,
+    ) -> AccountBrowserWorker:
         with self._lock:
             worker = self._workers.get(account_id)
             if worker is None:
-                worker = AccountBrowserWorker(self, account_id, visible)
+                worker = worker_cls(self, account_id, visible)
                 self._workers[account_id] = worker
                 worker.start()
             return worker
@@ -2545,6 +2863,7 @@ class DesktopApi:
     def shutdown(self, *_: Any) -> None:
         with self._lock:
             workers = list(self._workers.values())
+            self._persist_tasks_locked()
         for worker in workers:
             worker.stop()
         self._media_server.shutdown()
@@ -3117,19 +3436,81 @@ class DesktopApi:
         account_id = ""
         should_release = values.get("status") in {"succeeded", "failed"}
         should_consume_quota = False
+        terminal_task: dict[str, Any] | None = None
         with self._lock:
             if task_id in self._tasks:
-                if self._tasks[task_id].get("manuallyReleased"):
+                # 用户已手动释放/取消后，忽略 worker 后续的状态回写，避免终态被覆盖。
+                if self._tasks[task_id].get("manuallyReleased") or self._tasks[task_id].get("cancelled"):
                     return
                 previous_status = self._tasks[task_id].get("status")
                 self._tasks[task_id].update(values)
+                # 记录结束时间，前端悬浮窗据此短暂展示"已完成/失败"。
                 if should_release:
+                    self._tasks[task_id].setdefault("finishedAt", time.time())
                     account_id = str(self._tasks[task_id].get("accountId") or "")
                 should_consume_quota = values.get("status") == "succeeded" and previous_status != "succeeded"
+                self._persist_tasks_locked()
+                terminal_task = dict(self._tasks[task_id]) if should_release else None
         if should_consume_quota and account_id:
             self._record_account_generation_success(account_id)
         if should_release and account_id:
             self._release_account_usage(account_id, task_id)
+        # 任务进入终态后，由后端直接把结果回写到业务数据（分镜/资产），
+        # 不再依赖前端轮询时回写，保证切页面/切客户端期间结果也不丢。
+        if terminal_task is not None:
+            self._apply_task_result(terminal_task)
+
+    def _apply_task_result(self, task: dict[str, Any]) -> None:
+        """把任务终态结果回写到对应的 video_project（分镜或资产）。"""
+        project_id = str(task.get("projectId") or "").strip()
+        owner_id = str(task.get("ownerId") or "").strip()
+        owner_type = str(task.get("ownerType") or "").strip()
+        if not project_id or not owner_id or not owner_type:
+            return
+        try:
+            detail = self.backend_request("GET", f"/video-project/{quote(project_id, safe='')}")
+        except Exception:
+            return
+        if not isinstance(detail, dict):
+            return
+        key = "storyboards" if owner_type == "videoShot" else "assets"
+        items = detail.get(key)
+        if not isinstance(items, list):
+            return
+        changed = False
+        for item in items:
+            if not isinstance(item, dict) or str(item.get("id") or "") != owner_id:
+                continue
+            if task.get("status") == "succeeded":
+                item["resultFileId"] = str(task.get("resultFileId") or "")
+                item["resultUrl"] = str(task.get("resultUrl") or "")
+                item["resultPath"] = str(task.get("resultPath") or "")
+                item["status"] = "succeeded"
+                item["statusText"] = str(task.get("statusText") or "生成完成")
+                item["progress"] = 100
+                item["generationError"] = ""
+                if owner_type == "videoShot":
+                    item["taskId"] = ""
+                else:
+                    item["fileId"] = str(task.get("resultFileId") or item.get("fileId") or "")
+            else:
+                item["status"] = "failed"
+                item["statusText"] = str(task.get("statusText") or "生成失败")
+                item["progress"] = 0
+                item["generationError"] = str(task.get("statusText") or "生成失败")
+                if owner_type == "videoShot":
+                    item["taskId"] = ""
+            changed = True
+            break
+        if not changed:
+            return
+        try:
+            self.backend_request("PUT", f"/video-project/{quote(project_id, safe='')}", body={
+                "storyboards": detail.get("storyboards"),
+                "assets": detail.get("assets"),
+            })
+        except Exception:
+            pass
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AI video desktop demo")

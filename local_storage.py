@@ -609,6 +609,31 @@ class _Handler(BaseHTTPRequestHandler):
                 self._ok(None)
                 return
 
+        # 图片创作会话
+        if path == "/image-conversation/list" and method == "GET":
+            items = sorted(storage.list_documents("image_conversations"),
+                           key=lambda item: str(item.get("updatedAt") or item.get("createdAt") or ""),
+                           reverse=True)
+            self._ok(items)
+            return
+        if path == "/image-conversation" and method == "POST":
+            body = self._with_defaults(self._read_json(), {"title": "新对话", "messages": []})
+            self._ok(storage.create_document("image_conversations", body))
+            return
+        conversation_item = re.match(r"^/image-conversation/([^/]+)$", path)
+        if conversation_item:
+            conversation_id = unquote(conversation_item.group(1))
+            if method == "GET":
+                self._ok(storage.get_document("image_conversations", conversation_id))
+                return
+            if method == "PUT":
+                self._ok(storage.update_document("image_conversations", conversation_id, self._read_json()))
+                return
+            if method == "DELETE":
+                storage.delete_document("image_conversations", conversation_id)
+                self._ok(None)
+                return
+
         # 文件
         if path == "/file/upload" and method == "POST":
             self._ok(self._file_upload(storage))
@@ -1121,14 +1146,28 @@ class _Handler(BaseHTTPRequestHandler):
         result = dict(source)
         assets = source.get("assets") if isinstance(source.get("assets"), list) else []
         storyboards = source.get("storyboards") if isinstance(source.get("storyboards"), list) else []
+        active_statuses = {"preparing", "submitting", "queued", "pending", "generating", "processing", "running"}
         completed = 0
+        running = 0
         for shot in storyboards:
-            if isinstance(shot, dict) and (str(shot.get("resultFileId") or "").strip()
-                                          or str(shot.get("resultUrl") or "").strip()):
+            if not isinstance(shot, dict):
+                continue
+            has_result = bool(str(shot.get("resultFileId") or "").strip()
+                              or str(shot.get("resultUrl") or "").strip())
+            if has_result:
                 completed += 1
+                continue
+            status = str(shot.get("status") or "").strip().lower()
+            task_id = str(shot.get("taskId") or shot.get("seedanceTaskId") or "").strip()
+            if status in active_statuses or (task_id and status not in {"succeeded", "failed", "cancelled", "canceled"}):
+                running += 1
+        for asset in assets:
+            if isinstance(asset, dict) and str(asset.get("generatingStartedAt") or "").strip():
+                running += 1
         result["assetCount"] = len(assets)
         result["storyboardCount"] = len(storyboards)
         result["completedCount"] = completed
+        result["runningCount"] = running
         result.pop("assets", None)
         result.pop("storyboards", None)
         return result

@@ -4,6 +4,7 @@ import UiSelect from './components/UiSelect.vue'
 import WorkspaceLibraries from './components/WorkspaceLibraries.vue'
 import ProjectDetail from './components/ProjectDetail.vue'
 import VideoCreationWorkspace from './components/VideoCreationWorkspace.vue'
+import ImageChatWorkspace from './components/ImageChatWorkspace.vue'
 import BaseLoadingState from './components/BaseLoadingState.vue'
 import ModelManagerPanel from './components/ModelManagerPanel.vue'
 import ProjectFileTree from './components/ProjectFileTree.vue'
@@ -63,6 +64,77 @@ const authChecking = ref(false)
 const authLoading = ref(false)
 const authError = ref('')
 let pollTimer = null
+
+// 全局生成任务悬浮窗：任务由后端任务表统一管理，这里只轮询展示，
+// 因此切换任意菜单都能看到正在进行的生成任务。
+const globalTasks = ref([])
+const taskDockCollapsed = ref(false)
+const taskNowTick = ref(Date.now())
+let globalTaskTimer = null
+let taskNowTickTimer = null
+const ACTIVE_TASK_STATUSES = new Set(['queued', 'pending', 'preparing', 'opening', 'configuring', 'uploading', 'submitting', 'generating', 'processing', 'running', 'sharing', 'downloading', 'finalizing', 'returning_to_conversation', 'confirming_authorization', 'waiting_confirmation'])
+const RECENT_TASK_TTL = 10000
+const TASK_STATUS_LABELS = {
+  queued: '排队中', pending: '排队中', preparing: '准备中', opening: '准备中', configuring: '配置中',
+  uploading: '上传中', submitting: '提交中', generating: '生成中', processing: '处理中', running: '进行中',
+  sharing: '读取中', downloading: '保存中', finalizing: '收尾中',
+  returning_to_conversation: '生成中', confirming_authorization: '安全确认', waiting_confirmation: '等待确认',
+  succeeded: '已完成', failed: '失败', cancelled: '已取消', canceled: '已取消',
+}
+
+function isActiveTask(tk) {
+  return ACTIVE_TASK_STATUSES.has(String(tk?.status || '').toLowerCase())
+}
+
+const dockTasks = computed(() => globalTasks.value.filter(tk => {
+  if (isActiveTask(tk)) return true
+  const finishedAt = Number(tk.finishedAt || 0)
+  return finishedAt > 0 && taskNowTick.value - finishedAt < RECENT_TASK_TTL
+}))
+
+const runningTaskCount = computed(() => dockTasks.value.filter(isActiveTask).length)
+
+function taskStatusLabel(tk) {
+  const status = String(tk?.status || '').toLowerCase()
+  return TASK_STATUS_LABELS[status] || (tk?.statusText ? String(tk.statusText) : '进行中')
+}
+
+function taskStatusTone(tk) {
+  const status = String(tk?.status || '').toLowerCase()
+  if (status === 'succeeded') return 'done'
+  if (['failed', 'cancelled', 'canceled'].includes(status)) return 'failed'
+  return 'running'
+}
+
+async function refreshGlobalTasks() {
+  if (typeof window.pywebview?.api?.list_tasks !== 'function') return
+  try {
+    const tasks = await window.pywebview.api.list_tasks('')
+    globalTasks.value = Array.isArray(tasks) ? tasks : []
+  } catch (err) {
+    globalTasks.value = []
+  }
+}
+
+const cancellingTaskId = ref('')
+async function cancelGlobalTask(tk) {
+  const id = String(tk?.id || '')
+  if (!id) return
+  const api = window.pywebview?.api
+  if (typeof api?.cancel_task !== 'function') {
+    console.warn('cancel_task API 不可用，请重启客户端后再试')
+    return
+  }
+  cancellingTaskId.value = id
+  try {
+    await api.cancel_task(id)
+    await refreshGlobalTasks()
+  } catch (err) {
+    console.error('取消任务失败', err)
+  } finally {
+    cancellingTaskId.value = ''
+  }
+}
 
 const authenticated = computed(() => Boolean(platformUser.value && authToken.value))
 const isRunning = computed(() => task.value && !['succeeded', 'failed'].includes(task.value.status))
@@ -186,7 +258,7 @@ function startNewProject() {
   image.value = null
   task.value = null
   error.value = ''
-  scrollToSection('projects')
+  scrollToSection('create')
 }
 
 async function selectImage() {
@@ -217,6 +289,8 @@ async function generate() {
       accountId: selectedAccountId.value,
       autoAssignAccount: true,
       projectId: selectedProjectId.value,
+      ownerType: 'videoTask',
+      taskName: image.value.name ? `视频任务 ${image.value.name}` : '视频任务',
     })
     await pollTask(result.taskId)
     pollTimer = window.setInterval(() => {
@@ -814,6 +888,9 @@ async function saveConversionVideoAs() {
 }
 
 onMounted(() => {
+  refreshGlobalTasks()
+  globalTaskTimer = window.setInterval(refreshGlobalTasks, 2000)
+  taskNowTickTimer = window.setInterval(() => { taskNowTick.value = Date.now() }, 1000)
   if (apiReady()) initializeAuth()
   else {
     if (import.meta.env.DEV && new URLSearchParams(window.location.search).has('preview-auth')) {
@@ -835,6 +912,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (pollTimer) window.clearInterval(pollTimer)
   if (accountStatusTimer) window.clearInterval(accountStatusTimer)
+  if (globalTaskTimer) window.clearInterval(globalTaskTimer)
+  if (taskNowTickTimer) window.clearInterval(taskNowTickTimer)
 })
 </script>
 
@@ -886,7 +965,7 @@ onBeforeUnmount(() => {
 
       <button class="new-project-button" @click="startNewProject">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8.5v7M8.5 12h7" /></svg>
-        <span>新建项目</span>
+        <span>新建任务</span>
       </button>
 
       <div class="workspace-label">
@@ -906,12 +985,41 @@ onBeforeUnmount(() => {
           <svg viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="16" rx="2.5"/><circle cx="9" cy="9" r="1.5"/><path d="m5.5 17 4.2-4.2 3.1 3.1 2.5-2.5 3.2 3.6"/></svg><span>我的资产</span>
         </button>
         <button :class="{ active: activeMenu === 'create' }" @click="scrollToSection('create')">
-          <svg viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="14" rx="2.5"/><path d="m17 10 4-2v8l-4-2v-4Z"/></svg><span>视频生成</span>
+          <svg viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="14" rx="2.5"/><path d="m17 10 4-2v8l-4-2v-4Z"/></svg><span>视频任务</span>
+        </button>
+        <button :class="{ active: activeMenu === 'image' }" @click="scrollToSection('image')">
+          <svg viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="16" rx="2.5"/><circle cx="9" cy="9" r="1.5"/><path d="m5.5 17 4.2-4.2 3.1 3.1 2.5-2.5 3.2 3.6"/></svg><span>图片生成</span>
         </button>
         <button :class="{ active: activeMenu === 'convert' }" @click="scrollToSection('convert')">
           <svg viewBox="0 0 24 24"><path d="M8.5 14.5 6 17a3.5 3.5 0 0 1-5-5l3.5-3.5a3.5 3.5 0 0 1 5 0"/><path d="m15.5 9.5 2.5-2.5a3.5 3.5 0 0 1 5 5l-3.5 3.5a3.5 3.5 0 0 1-5 0"/><path d="m8 16 8-8"/></svg><span>链接转换</span>
         </button>
       </nav>
+
+      <div v-if="dockTasks.length" class="task-dock" :class="{ collapsed: sidebarCollapsed || taskDockCollapsed }">
+        <button class="task-dock-head" @click="taskDockCollapsed = !taskDockCollapsed">
+          <span class="task-dock-title">
+            <span class="task-dock-pulse" :class="{ idle: !runningTaskCount }"></span>
+            后台任务{{ runningTaskCount ? ` · ${runningTaskCount}` : '' }}
+          </span>
+          <svg class="task-dock-caret" :class="{ up: !taskDockCollapsed }" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
+        </button>
+        <div v-show="!taskDockCollapsed && !sidebarCollapsed" class="task-dock-list">
+          <div v-for="tk in dockTasks" :key="tk.id" class="task-dock-item" :class="taskStatusTone(tk)">
+            <div class="task-dock-row">
+              <span class="task-dock-name" :title="tk.taskName || tk.ownerType">{{ tk.taskName || tk.ownerType || '生成任务' }}</span>
+              <span class="task-dock-badge">{{ taskStatusLabel(tk) }}</span>
+              <button v-if="isActiveTask(tk)" class="task-dock-cancel" type="button" data-tooltip="取消任务" :disabled="cancellingTaskId === String(tk.id)" :aria-label="`取消任务 ${tk.taskName || tk.ownerType || ''}`" @click="cancelGlobalTask(tk)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10M9 7V5h6v2M8 7l1 12h6l1-12"/></svg>
+              </button>
+            </div>
+            <div class="task-dock-meta">
+              <span class="task-dock-id">#{{ String(tk.id || '').slice(0, 8) }}</span>
+              <span v-if="tk.progress" class="task-dock-progress-text">{{ tk.progress }}%</span>
+            </div>
+            <div v-if="isActiveTask(tk)" class="task-dock-bar"><span :style="{ width: `${Number(tk.progress) || 0}%` }"></span></div>
+          </div>
+        </div>
+      </div>
 
       <div class="sidebar-bottom">
         <div class="sidebar-account-row">
@@ -963,7 +1071,7 @@ onBeforeUnmount(() => {
 
     <section id="home" class="hero">
       <p class="eyebrow">VIDEO GENERATION</p>
-      <h1>视频生成</h1>
+      <h1>视频任务</h1>
       <p class="subtitle">上传参考画面，通过 OriginalDoubao 或 Seedance 生成视频。</p>
     </section>
 
@@ -1046,6 +1154,13 @@ onBeforeUnmount(() => {
       :storage-base="appInfo?.storageBase"
       :selected-account-id="selectedAccountId"
       :video-model="model"
+    />
+
+    <ImageChatWorkspace
+      v-else-if="activeMenu === 'image'"
+      :token="authToken"
+      :api-base="appInfo?.apiBase"
+      :storage-base="appInfo?.storageBase"
     />
 
     <template v-else-if="activeMenu === 'convert'">

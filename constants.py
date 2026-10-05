@@ -31,6 +31,7 @@ ACCOUNTS_FILE = DATA_DIR / "accounts.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 AUTH_FILE = DATA_DIR / "auth.json"
 CREDENTIALS_FILE = DATA_DIR / "credentials.json"
+GENERATION_TASKS_FILE = DATA_DIR / "generation_tasks.json"
 ORIGINAL_DOUBAO_URL = "https://www.doubao.com/"
 BUNDLED_CHROME = ROOT / "runtime" / "chrome-win64" / "chrome.exe"
 API_BASE_URL = os.environ.get("COMIC_DRAMA_API_BASE", "http://127.0.0.1:8080").rstrip("/")
